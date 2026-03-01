@@ -1,0 +1,7 @@
+.env
+.direnv/
+.envsrc
+shell.nix
+sample_form.txt
+__pyache_
+engines/__pyache_
