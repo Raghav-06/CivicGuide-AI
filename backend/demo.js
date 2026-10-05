@@ -3,11 +3,15 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { readForm } from "./src/formReader.js";
 import { writeFilledPDF } from "./src/formOutput.js";
 import { analyzeForm, processAnswer, validateForm, getDocuments, scoreSubmission } from "./src/core.js";
 import { answerQuestion } from "./src/engines/assistant.js";
+
+// Bundled sample form, found relative to this file so the demo works from any directory.
+const SAMPLE_FORM = fileURLToPath(new URL("./sample_form.txt", import.meta.url));
 
 const C = {
   BLUE: "\x1b[94m",
@@ -93,7 +97,7 @@ async function getFormText() {
 
   if (choice === "3") {
     try {
-      const text = await readFile("sample_form.txt", "utf8");
+      const text = await readFile(SAMPLE_FORM, "utf8");
       console.log(`  ${C.GREEN}✅ Sample form loaded${C.END}`);
       return text;
     } catch (err) {

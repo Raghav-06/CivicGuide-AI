@@ -1,0 +1,30 @@
+INCOME TAX RETURN — ITR-1 (SAHAJ), SIMPLIFIED SAMPLE
+For resident individuals with income from salary, one house property and other sources (total income up to ₹50 lakh)
+
+PART A — GENERAL INFORMATION
+
+1. Full Name of the Assessee (as per PAN): _____________
+2. Permanent Account Number (PAN): _____________
+3. Aadhaar Number (12 digits): _____________
+4. Date of Birth (DD/MM/YYYY): _____________
+5. Residential Address (Flat/Door No., Road, Area, City, State, PIN): _____________
+6. Mobile Number: _____________
+7. Email Address: _____________
+8. Residential Status (Resident / Non-Resident / Not Ordinarily Resident): _____________
+9. Tax Regime Opted (Old Regime / New Regime): _____________
+
+PART B — GROSS TOTAL INCOME
+
+10. Income from Salary / Pension (in ₹, for the financial year): _____________
+11. Income from One House Property (in ₹; enter a negative figure for a loss): _____________
+12. Income from Other Sources, e.g. savings / fixed-deposit interest (in ₹): _____________
+
+PART C — DEDUCTIONS AND TAXES PAID
+
+13. Deductions claimed under Chapter VI-A, e.g. 80C, 80D (in ₹): _____________
+14. Total Tax Deducted at Source (TDS) as per Form 16 / 26AS (in ₹): _____________
+15. Bank Account Number for refund (with IFSC code): _____________
+
+VERIFICATION
+I solemnly declare that to the best of my knowledge and belief, the information given in this
+return is correct and complete and is in accordance with the provisions of the Income-tax Act, 1961.

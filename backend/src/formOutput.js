@@ -50,8 +50,12 @@ function registerFonts(doc) {
   doc.registerFont("deva-bold", FONTS.devaBold);
 }
 
-/** Write text that may mix scripts, switching font per run. `x`/`y` as for doc.text(). */
-function mixedText(doc, text, { bold = false, x, y, ...opts } = {}) {
+/**
+ * Write text that may mix scripts, switching font per run. `x`/`y` as for doc.text(); they
+ * default to the left margin and the current line, because doc.text() with undefined x/y
+ * misreads its arguments and drops options such as `align`.
+ */
+function mixedText(doc, text, { bold = false, x = doc.page.margins.left, y = doc.y, ...opts } = {}) {
   const runs = scriptRuns(text);
   if (!runs.length) runs.push({ deva: false, text: "" });
   runs.forEach((run, i) => {

@@ -978,7 +978,7 @@ export default function FormSession({
       }
 
       if (aiActive && docs?.summary) {
-        addMessage("ai", `📁 **Documents needed:** ${docs.summary}\n\nSee the documents panel below to attach each one.`);
+        addMessage("ai", `📁 **Documents needed:** ${docs.summary}\n\nMark each one ready in the documents panel below.`);
       }
 
     } catch (err) {
@@ -1270,7 +1270,7 @@ export default function FormSession({
 
           {/* ── Documents ── */}
           <div className="panel-card" style={{ padding: "1.5rem" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.35rem" }}>
               <h3 className="section-title" style={{ marginBottom: 0 }}>Required Documents</h3>
               {docRecommendations?.estimated_processing_time && (
                 <span style={{ fontSize: "0.75rem", color: "var(--muted-fg)" }}>
@@ -1278,6 +1278,9 @@ export default function FormSession({
                 </span>
               )}
             </div>
+            <p style={{ fontSize: "0.75rem", color: "var(--muted-fg)", marginBottom: "1rem", lineHeight: 1.5 }}>
+              We only note which file you'll bring — nothing is uploaded. Bring the originals when you submit.
+            </p>
 
             {docRecommendations?.summary && (
               <p style={{ fontSize: "0.8rem", color: "var(--muted-fg)", marginBottom: "1rem", lineHeight: 1.5 }}>
@@ -1311,13 +1314,13 @@ export default function FormSession({
                           ? <p className="doc-status doc-status-ok" title={uploaded.name}>{uploaded.name} · {uploaded.size}</p>
                           : reason
                             ? <p className="doc-status" style={{ fontStyle: "italic" }}>{reason}</p>
-                            : <p className="doc-status">pending upload</p>
+                            : <p className="doc-status">Not ready yet</p>
                         }
                       </div>
                     </div>
                     {!uploaded ? (
                       <button className="btn-ghost" onClick={() => triggerDocUpload(docName)}>
-                        <UploadIcon size={14} /> Upload
+                        <UploadIcon size={14} /> Mark ready
                       </button>
                     ) : (
                       <div style={{ display: "flex", gap: 6 }}>
@@ -1442,7 +1445,7 @@ export default function FormSession({
 
             {interviewDone && (
               <p style={{ fontSize: "0.75rem", color: "var(--muted-fg)", marginTop: -4 }}>
-                📎 {filledCount}/{totalFields} fields · {Object.keys(docUploads).length} doc(s) attached
+                📎 {filledCount}/{totalFields} fields · {Object.keys(docUploads).length} doc(s) marked ready
                 {validation ? (aiActive ? " · AI-validated" : " · locally validated") : " · validating…"}
               </p>
             )}

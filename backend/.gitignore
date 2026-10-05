@@ -3,5 +3,4 @@ node_modules/
 .direnv/
 .envsrc
 shell.nix
-sample_form.txt
 *.pdf

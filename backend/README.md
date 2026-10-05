@@ -37,9 +37,9 @@ LLM Inference: provider-neutral (src/engines/ai.js) — any model from OpenAI, A
 
 Document Parsing: unpdf (PDFs) and mammoth (DOCX).
 
-PDF Generation: pdfkit for compiling the final, structured, submission-ready PDF complete with tables and checklists.
+PDF Generation: pdfkit with bundled Noto Sans / Noto Sans Devanagari fonts (assets/fonts, SIL OFL) so ₹ and Hindi text render, for compiling the final, structured, submission-ready PDF complete with tables and checklists.
 
-Database: PostgreSQL via pg. Users and email-verification tokens; tables are created automatically on startup (src/db/schema.sql).
+Database (optional): PostgreSQL via pg, used only for accounts — users and email-verification tokens; tables are created automatically on startup (src/db/schema.sql). Without it the server runs with accounts disabled.
 
 Auth: bcryptjs password hashing, JWT session in an httpOnly cookie, nodemailer (SMTP) for email verification, google-auth-library for Google sign-in.
 
@@ -49,12 +49,22 @@ Install dependencies:
 Bash
 cd backend
 npm install
-Create the database (PostgreSQL 13+):
+(Optional, for accounts) Create the database (PostgreSQL 13+):
 
 Bash
 psql -U postgres -c "CREATE DATABASE civiguide;"
 Configure Environment Variables:
-Copy .env.example to .env and fill it in. Required: DATABASE_URL, JWT_SECRET. For AI features also set AI_PROVIDER, AI_API_KEY and AI_MODEL — any supported provider and any model it serves (OpenAI, Anthropic, Groq, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, or any OpenAI-compatible server via AI_PROVIDER=custom + AI_BASE_URL). Without them the app runs on its offline fallbacks.
+Copy .env.example to .env and fill it in. Every setting is optional:
+
+What works with which setup:
+- No AI key, no Postgres: the ready-made (preset) forms work end to end with built-in rules — local answer parsing, validation, scoring, standard document checklists — and PDF generation. Sign-in is hidden.
+- With AI (AI_PROVIDER, AI_API_KEY, AI_MODEL — any supported provider and any model it serves: OpenAI, Anthropic, Groq, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, or any OpenAI-compatible server via AI_PROVIDER=custom + AI_BASE_URL): all six engines run here, and users can upload their own PDF/DOCX forms. Uploading your own form needs AI.
+- With Postgres (DATABASE_URL + JWT_SECRET): accounts. JWT_SECRET is required only when DATABASE_URL is set; with NODE_ENV=production it must not be "change_me" and must be at least 32 characters. If the database can't be reached, the server logs a warning and starts with accounts disabled.
+
+AI cost protection:
+- Every AI endpoint is rate-limited per IP: AI_RATE_LIMIT requests per 5 minutes (default 60), and /api/analyze-pdf AI_UPLOAD_RATE_LIMIT per 15 minutes (default 10).
+- REQUIRE_LOGIN_FOR_AI=true allows only signed-in users to call the AI endpoints (needs the database; the server refuses to start without it). Default off.
+- TRUST_PROXY: behind a reverse proxy, set to the number of proxy hops (usually 1) so rate limits see client IPs.
 
 SMTP_* — the server that sends verification emails. With Gmail, use smtp.gmail.com, port 465, SMTP_SECURE=true and a Google App Password (not your normal password). If SMTP_HOST is left empty in development, the verification link is printed to the server console instead.
 
@@ -67,9 +77,10 @@ Bash
 npm start        # or: npm run dev (restarts on file changes)
 Endpoints (all JSON unless noted):
 
-GET  /health
-POST /api/analyze-preset   { form_name }
-POST /api/analyze-pdf      multipart/form-data, field "file" (PDF)
+GET  /health               → { ai_enabled, auth_enabled, ai_requires_login, … }
+POST /api/analyze-preset   { form_name } → { form_fields, form_name, notice }
+POST /api/analyze-pdf      multipart/form-data, field "file" (PDF or DOCX, max 20 MB) → { form_fields, form_name, notice }
+POST /api/ask              { question, field?, form_name? } → { answer }
 POST /api/process-answer   { field, user_input, form_fields, context }
 POST /api/validate         { form_fields, filled_answers }
 POST /api/documents        { form_fields, filled_answers }
@@ -79,7 +90,7 @@ POST /api/generate-pdf     { form_fields, filled_answers, document_checklist, fo
 Auth (session is an httpOnly cookie; send requests with credentials):
 
 GET  /api/auth/me                    → { user } (null when signed out)
-GET  /api/auth/config                → { google_client_id }
+GET  /api/auth/config                → { google_client_id, auth_enabled }
 POST /api/auth/signup                { name, email, password } → sends verification email
 POST /api/auth/verify-email          { token } → verifies + signs in
 POST /api/auth/resend-verification   { email }
@@ -87,13 +98,17 @@ POST /api/auth/login                 { email, password } → 403 code EMAIL_NOT_
 POST /api/auth/google                { credential } (Google ID token)
 POST /api/auth/logout
 
+Without a database, /api/auth/me returns { user: null }, /api/auth/config returns { google_client_id: null, auth_enabled: false }, and every other auth endpoint returns 503.
+
+Errors are JSON { detail }. Malformed request bodies get 400, uploads over 20 MB get 413, and rate-limited requests get 429. `notice` is set when part of a very long form could not be analysed.
+
 💻 Running the Interactive Demo
 This repository includes a fully functional, interactive terminal interface to test the 6-engine pipeline.
 
 Bash
 npm run demo
 CLI Commands:
-fill: Initiates the form-filling pipeline. You will be prompted to provide a PDF path, a DOCX path, or paste raw text. The AI will then conduct a dynamic interview to fill the form.
+fill: Initiates the form-filling pipeline. You will be prompted to provide a PDF path, a DOCX path, load the bundled sample form (sample_form.txt, a simplified ITR-1), or paste raw text. The AI will then conduct a dynamic interview to fill the form.
 
 General Q&A: Type any question regarding government processes, visas, or documents, and the AI will act as a bureaucratic expert.
 
