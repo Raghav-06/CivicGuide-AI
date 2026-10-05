@@ -473,8 +473,15 @@ function localFieldHelp(field) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   OFFLINE jsPDF FALLBACK (when backend PDF endpoint unavailable)
+   OFFLINE jsPDF FALLBACK (last resort, when the backend PDF endpoint is unavailable)
+   jsPDF's built-in fonts only cover Windows-1252, so ₹ and Indian scripts can't be
+   drawn here — the backend PDF (with bundled Noto fonts) handles those.
    ══════════════════════════════════════════════════════════════════════ */
+const WIN1252_EXTRA = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
+const pdfSafe = (v) => String(v ?? "").replace(/₹\s*/g, "Rs. ");   // ₹ is common enough to spell out
+function hasUnsupportedChars(values) {
+  return values.some(v => [...pdfSafe(v)].some(c => c.charCodeAt(0) > 0xFF && !WIN1252_EXTRA.includes(c)));
+}
 let jsPDFPromise = null;
 function loadJsPDF() {
   if (jsPDFPromise) return jsPDFPromise;
@@ -504,7 +511,7 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
   doc.text("CiviGuide AI — Official Form", margin, 12);
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.text(selectedForm, margin, 21);
+  doc.text(pdfSafe(selectedForm), margin, 21);
   const now = new Date().toLocaleString("en-IN", { dateStyle: "long", timeStyle: "short" });
   doc.text(`Generated: ${now}`, pageW - margin, 21, { align: "right" });
   y = 38;
@@ -520,9 +527,9 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
     const value = fieldValues[field.field] ?? "— not provided —";
     if (y > 270) { doc.addPage(); y = margin; }
     doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor(100, 100, 100);
-    doc.text((field.label || field.field).toUpperCase(), margin, y); y += 5;
+    doc.text(pdfSafe(field.label || field.field).toUpperCase(), margin, y); y += 5;
     doc.setFontSize(11); doc.setFont("helvetica", "normal"); doc.setTextColor(20, 20, 20);
-    const lines = doc.splitTextToSize(String(value), pageW - margin * 2);
+    const lines = doc.splitTextToSize(pdfSafe(value), pageW - margin * 2);
     doc.text(lines, margin, y); y += lines.length * 6 + 4;
     doc.setDrawColor(240, 240, 240);
     doc.line(margin, y, pageW - margin, y); y += 4;
@@ -531,27 +538,27 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
   y += 6;
   if (y > 260) { doc.addPage(); y = margin; }
   doc.setFontSize(12); doc.setFont("helvetica", "bold"); doc.setTextColor(30, 30, 30);
-  doc.text("Uploaded Documents", margin, y); y += 2;
+  doc.text("Documents Marked Ready", margin, y); y += 2;
   doc.setDrawColor(220, 220, 220);
   doc.line(margin, y, pageW - margin, y); y += 8;
 
   Object.entries(docUploads).forEach(([name, info]) => {
     if (y > 270) { doc.addPage(); y = margin; }
     doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.setTextColor(100, 100, 100);
-    doc.text(name.toUpperCase(), margin, y); y += 5;
+    doc.text(pdfSafe(name).toUpperCase(), margin, y); y += 5;
     doc.setFontSize(10); doc.setFont("helvetica", "normal");
     doc.setTextColor(22, 163, 74);
-    doc.text(`✓  ${info.name}  (${info.size})`, margin, y); y += 9;
+    doc.text(info.name ? `Ready - file noted: ${info.name}` : "Ready", margin, y); y += 9;
   });
 
   const totalPages = doc.getNumberOfPages();
   for (let p = 1; p <= totalPages; p++) {
     doc.setPage(p);
     doc.setFontSize(8); doc.setTextColor(160, 160, 160);
-    doc.text(`CiviGuide AI · ${selectedForm} · Page ${p} of ${totalPages}`, pageW / 2, 292, { align: "center" });
+    doc.text(`CiviGuide AI · ${pdfSafe(selectedForm)} · Page ${p} of ${totalPages}`, pageW / 2, 292, { align: "center" });
   }
 
-  const safeTitle = selectedForm.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "");
+  const safeTitle = selectedForm.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "") || "Form";
   doc.save(`${safeTitle}_CiviGuide.pdf`);
 }
 
@@ -1010,6 +1017,10 @@ export default function FormSession({
 
     // Fallback: jsPDF in-browser
     try {
+      const texts = [selectedForm, ...formFields.map(f => f.label), ...Object.values(fieldValues), ...Object.keys(docUploads)];
+      if (hasUnsupportedChars(texts)) {
+        setPdfError("Some of your answers use characters (such as ₹ or Hindi text) that the offline PDF can't display, so they may look wrong. Start the backend server for a PDF that renders them correctly.");
+      }
       await localGeneratePDF(formFields, fieldValues, docUploads, selectedForm);
     } catch {
       setPdfError("Could not generate PDF. Please check your connection and try again.");

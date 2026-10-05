@@ -29,7 +29,9 @@ import { generateFilledPDF } from "./src/formOutput.js";
 import { PRESET_FORM_TEXTS } from "./src/presets.js";
 import { isEmpty, aiStatus } from "./src/engines/ai.js";
 import { answerQuestion } from "./src/engines/assistant.js";
-import { HttpError, route } from "./src/http.js";
+import {
+  HttpError, route, readFields, readAnswers, readObject, readField, readText, attachmentHeader,
+} from "./src/http.js";
 import { migrate } from "./src/db/index.js";
 import authRouter, { disabledAuthRouter } from "./src/routes/auth.js";
 
@@ -143,12 +145,12 @@ app.post("/api/analyze-pdf", upload.single("file"), route(async (req, res) => {
 
 // ── Assistant: free-form questions about forms and documents ─────────
 app.post("/api/ask", route(async (req, res) => {
-  const question = String(req.body?.question ?? "").trim();
-  if (!question) throw new HttpError(400, "Please type a question.");
-  if (question.length > 1000) throw new HttpError(400, "Please keep your question under 1000 characters.");
+  const question = readText(req.body, "question", { label: "your question" });
+  const formName = typeof req.body?.form_name === "string" ? req.body.form_name.slice(0, 200) : undefined;
+  const field = req.body?.field ? readField(req.body) : undefined;
 
   try {
-    const answer = await answerQuestion(question, { formName: req.body?.form_name, field: req.body?.field });
+    const answer = await answerQuestion(question, { formName, field });
     res.json({ answer });
   } catch (err) {
     console.error("ask failed:", err);
@@ -158,7 +160,10 @@ app.post("/api/ask", route(async (req, res) => {
 
 // ── Engine 2+3: Process a single answer ──────────────────────────────
 app.post("/api/process-answer", route(async (req, res) => {
-  const { field = {}, user_input, form_fields = [], context = {} } = req.body ?? {};
+  const field = readField(req.body);
+  const user_input = readText(req.body, "user_input", { label: "an answer" });
+  const form_fields = readFields(req.body);
+  const context = readAnswers(req.body, "context");
   try {
     res.json(await processAnswer(field, user_input, form_fields, context));
   } catch (err) {
@@ -177,7 +182,8 @@ app.post("/api/process-answer", route(async (req, res) => {
 
 // ── Engine 4: Validate form ───────────────────────────────────────────
 app.post("/api/validate", route(async (req, res) => {
-  const { form_fields = [], filled_answers = {} } = req.body ?? {};
+  const form_fields = readFields(req.body);
+  const filled_answers = readAnswers(req.body);
   try {
     res.json(await validateForm(form_fields, filled_answers));
   } catch (err) {
@@ -188,7 +194,8 @@ app.post("/api/validate", route(async (req, res) => {
 
 // ── Engine 5: Document recommendations ───────────────────────────────
 app.post("/api/documents", route(async (req, res) => {
-  const { form_fields = [], filled_answers = {} } = req.body ?? {};
+  const form_fields = readFields(req.body);
+  const filled_answers = readAnswers(req.body);
   try {
     res.json(await getDocuments(form_fields, filled_answers));
   } catch (err) {
@@ -207,7 +214,9 @@ app.post("/api/documents", route(async (req, res) => {
 
 // ── Engine 6: Score submission ────────────────────────────────────────
 app.post("/api/score", route(async (req, res) => {
-  const { form_fields = [], filled_answers = {}, validation_result = {} } = req.body ?? {};
+  const form_fields = readFields(req.body);
+  const filled_answers = readAnswers(req.body);
+  const validation_result = readObject(req.body, "validation_result");
   try {
     res.json(await scoreSubmission(form_fields, filled_answers, validation_result));
   } catch (err) {
@@ -228,10 +237,11 @@ app.post("/api/score", route(async (req, res) => {
 
 // ── PDF generation + download ─────────────────────────────────────────
 app.post("/api/generate-pdf", route(async (req, res) => {
-  const {
-    form_fields = [], filled_answers = {}, document_checklist = {}, form_name = "Government Form",
-  } = req.body ?? {};
-  const safeName = form_name.replace(/[\s/]/g, "_");
+  const form_fields = readFields(req.body);
+  const filled_answers = readAnswers(req.body);
+  const document_checklist = readObject(req.body, "document_checklist");
+  const rawName = req.body?.form_name;
+  const formName = (rawName === undefined || rawName === null ? "" : String(rawName)).trim().slice(0, 120) || "Government Form";
 
   let pdf;
   try {
@@ -241,7 +251,7 @@ app.post("/api/generate-pdf", route(async (req, res) => {
   }
   res.set({
     "Content-Type": "application/pdf",
-    "Content-Disposition": `attachment; filename="${safeName}_CiviGuide.pdf"`,
+    "Content-Disposition": attachmentHeader(`${formName.replace(/[\s/\\]+/g, "_")}_CiviGuide.pdf`),
   });
   res.send(pdf);
 }));
