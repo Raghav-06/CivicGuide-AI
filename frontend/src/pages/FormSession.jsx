@@ -419,6 +419,18 @@ function getFallbackTips(formName) {
   return FALLBACK_TIPS[formName] ?? [];
 }
 
+/* Document names are React keys and lookup keys: drop unnamed and duplicate (case-insensitive) entries. */
+function dedupeDocs(docs) {
+  const seen = new Set();
+  return (Array.isArray(docs) ? docs : [])
+    .filter(d => d && typeof d.name === "string" && d.name.trim())
+    .map(d => ({ ...d, name: d.name.trim() }))
+    .filter(d => !seen.has(d.name.toLowerCase()) && seen.add(d.name.toLowerCase()));
+}
+
+/* Clarifying questions asked for one field before the latest answer is accepted as-is. */
+const MAX_CLARIFICATIONS = 2;
+
 /* ── Field-state helpers ── */
 function isFilled(value) {
   return value !== undefined && value !== null && String(value).trim() !== "";
@@ -636,6 +648,7 @@ export default function FormSession({
   const chatRef      = useRef(null);
   const docInputRef  = useRef(null);   // one hidden file input shared by every document row
   const pendingDoc   = useRef(null);   // which document row opened the file picker
+  const clarifyRounds = useRef({});    // { field_key: clarifications asked so far }
 
   /* ── Derived ── */
   // Count only schema fields — derived values can add keys that aren't on the form.
@@ -648,8 +661,9 @@ export default function FormSession({
 
   /* ── Doc names to show — use Engine 5 recommendations if available, else fallback ── */
   // FIX #1: getFallbackDocNames is now defined above; this line no longer throws ReferenceError
-  const docNames = docRecommendations?.required_documents?.map(d => d.name)
-    ?? getFallbackDocNames(selectedForm);
+  const docNames = docRecommendations?.required_documents?.length
+    ? dedupeDocs(docRecommendations.required_documents).map(d => d.name)
+    : getFallbackDocNames(selectedForm);
 
   /* ── Auto-scroll chat ── */
   useEffect(() => {
@@ -675,6 +689,7 @@ export default function FormSession({
       setScoreData(null);
       setDocRecommendations(null);
       setPdfError("");
+      clarifyRounds.current = {};
 
       const status = await checkBackend();
       if (cancelled) return;
@@ -792,6 +807,7 @@ export default function FormSession({
 
     /* ── skip ── */
     if (trimmed.toLowerCase() === "skip") {
+      delete clarifyRounds.current[field.field];
       if (editingIdx !== null) {
         setEditingIdx(null);
         setCurrentFieldIdx(formFields.length);
@@ -838,25 +854,40 @@ export default function FormSession({
     }
     result ??= localProcessAnswer(field, trimmed, fieldValues, formFields);
 
-    let primaryField  = result.primary_field ?? { [field.field]: trimmed };
-    let derivedFields = result.derived_fields ?? {};
-    let clarification = result.clarification_needed ? (result.clarification_question || `Could you tell me your ${label} again?`) : null;
-    let uncertainty   = result.uncertainty_detected ?? false;
+    const primaryField  = result.primary_field ?? { [field.field]: trimmed };
+    const derivedFields = result.derived_fields ?? {};
+    let clarification   = result.clarification_needed ? (result.clarification_question || `Could you tell me your ${label} again?`) : null;
+    let uncertainty     = result.uncertainty_detected ?? false;
+    let value           = field.field in primaryField ? primaryField[field.field] : Object.values(primaryField)[0];
 
     setIsTyping(false);
 
-    // AI wants clarification — stay on this field
-    if (clarification) {
-      addMessage("ai", `🤔 ${clarification}`);
-      return;
+    // An empty value is never committed (it would show up as "null") — ask again instead.
+    if (!isFilled(value) || String(value).trim().toLowerCase() === "null") {
+      value = null;
+      clarification ??= `Sorry, I couldn't work out your ${label} from that. Could you say it another way?`;
     }
+
+    // Clarification needed — stay on this field, at most MAX_CLARIFICATIONS times.
+    if (clarification) {
+      const rounds = clarifyRounds.current[field.field] ?? 0;
+      if (rounds < MAX_CLARIFICATIONS) {
+        clarifyRounds.current[field.field] = rounds + 1;
+        addMessage("ai", `🤔 ${clarification}`);
+        return;
+      }
+      // Asked enough times: accept the latest answer, flagged for review, and move on.
+      if (!isFilled(value)) value = trimmed;
+      uncertainty = true;
+    }
+    delete clarifyRounds.current[field.field];
 
     // Commit: the primary answer always wins; derived values only fill fields that are still empty.
     const newFieldValues = { ...fieldValues };
     for (const [k, v] of Object.entries(derivedFields)) {
       if (k !== field.field && !isFilled(newFieldValues[k])) newFieldValues[k] = v;
     }
-    Object.assign(newFieldValues, primaryField);
+    newFieldValues[field.field] = value;
     setFieldValues(newFieldValues);
 
     // Engines 4–6 results are stale once an answer changes.
@@ -865,7 +896,7 @@ export default function FormSession({
       setScoreData(null);
     }
 
-    const savedValue = formatValue(Object.values(primaryField)[0] ?? trimmed);
+    const savedValue = formatValue(value);
     const derivedNotices = Object.entries(derivedFields)
       .filter(([k]) => k !== field.field && newFieldValues[k] === derivedFields[k] && !isFilled(fieldValues[k]))
       .map(([k, v]) => `↳ Also filled **${formFields.find(f => f.field === k)?.label ?? k}** = ${formatValue(v)}`)
@@ -913,6 +944,7 @@ export default function FormSession({
         score = await apiScore(formFields, answers, val);
 
         setValidation(val);
+        docs = { ...docs, required_documents: dedupeDocs(docs?.required_documents) };
         setDocRecommendations(docs);
         setScoreData(score);
       } else {
