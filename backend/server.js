@@ -6,7 +6,7 @@
  * Setup:
  *   npm install
  *   Copy .env.example to .env and fill in the values
- *   (AI_PROVIDER / AI_API_KEY / AI_MODEL, DATABASE_URL, JWT_SECRET, SMTP_*, GOOGLE_CLIENT_ID).
+ *   (AI_BASE_URL / AI_API_KEY / AI_MODEL, DATABASE_URL, JWT_SECRET, SMTP_*, GOOGLE_CLIENT_ID).
  *
  * Run:
  *   npm start        (or `npm run dev` to restart on file changes)
@@ -72,7 +72,7 @@ if (REQUIRE_LOGIN_FOR_AI && !authEnabled) {
 
 const ai = aiStatus();
 if (ai.enabled) {
-  console.log(`AI: ${ai.provider} · ${ai.model}`);
+  console.log(`AI: enabled · ${ai.model} @ ${ai.host}`);
 } else {
   console.warn(`AI disabled (${ai.problem}) — the app will run on its offline fallbacks. See .env.example.`);
 }
@@ -122,10 +122,10 @@ app.use("/api/auth", authEnabled ? authRouter : disabledAuthRouter);
 
 /** Health check — confirms server is running. */
 app.get("/health", (req, res) => {
-  const { enabled, provider, model } = aiStatus();
+  const { enabled, host, model } = aiStatus();
   res.json({
     status: "ok", message: "CiviGuide AI backend is running",
-    ai_enabled: enabled, ai_provider: provider, ai_model: model,
+    ai_enabled: enabled, ai_host: host, ai_model: model,
     auth_enabled: authEnabled, ai_requires_login: REQUIRE_LOGIN_FOR_AI,
   });
 });

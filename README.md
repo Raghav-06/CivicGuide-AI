@@ -120,7 +120,7 @@ Open http://localhost:5173. The Vite dev server proxies `/api` to the backend, s
 | **+ Postgres** | Accounts: email sign-up with verification, password sign-in and (optionally) Google sign-in. Postgres is used only for accounts. |
 
 ### Settings (`backend/.env`)
-- **AI** — `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`: any provider (OpenAI, Anthropic, Groq, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, or any OpenAI-compatible server via `custom` + `AI_BASE_URL`) and any model it serves. Without them the app uses its built-in rules.
+- **AI** — `AI_BASE_URL` and `AI_MODEL` (required to enable AI) plus `AI_API_KEY` if the API needs one. Any OpenAI-compatible `/chat/completions` API works (Groq, OpenAI, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, LM Studio, …); `.env.example` lists their base URLs and a complete Groq example. For Anthropic, set `AI_API_STYLE=anthropic` (then `AI_API_KEY` is required). Optional: `AI_MAX_TOKENS`, `AI_EFFORT`, `AI_TIMEOUT_MS`. Without `AI_BASE_URL`/`AI_MODEL` the app uses its built-in rules.
 - **Accounts (optional)** — `DATABASE_URL` (PostgreSQL; tables are created on startup) and `JWT_SECRET`, which is required only when `DATABASE_URL` is set. With `NODE_ENV=production` the server refuses to start if `JWT_SECRET` is `change_me` or shorter than 32 characters. If the database is missing or unreachable, the server still starts with accounts disabled.
 - **Email verification** — `SMTP_*` (optional in development: verification links are printed to the console).
 - **Google sign-in** — `GOOGLE_CLIENT_ID` (optional).

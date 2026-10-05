@@ -33,7 +33,7 @@ Runtime: Node.js 18+ (ES modules)
 
 API Server: Express (server.js), with multer for PDF uploads and cors for the Vite dev server.
 
-LLM Inference: provider-neutral (src/engines/ai.js) — any model from OpenAI, Anthropic, Groq, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama or any OpenAI-compatible server, chosen with AI_PROVIDER / AI_MODEL.
+LLM Inference: provider-neutral (src/engines/ai.js), configured only through environment variables — AI_BASE_URL + AI_MODEL (+ AI_API_KEY if the API needs one) for any OpenAI-compatible /chat/completions API (Groq, OpenAI, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, LM Studio, …), or AI_API_STYLE=anthropic to use the Anthropic SDK.
 
 Document Parsing: unpdf (PDFs) and mammoth (DOCX).
 
@@ -58,7 +58,7 @@ Copy .env.example to .env and fill it in. Every setting is optional:
 
 What works with which setup:
 - No AI key, no Postgres: the ready-made (preset) forms work end to end with built-in rules — local answer parsing, validation, scoring, standard document checklists — and PDF generation. Sign-in is hidden.
-- With AI (AI_PROVIDER, AI_API_KEY, AI_MODEL — any supported provider and any model it serves: OpenAI, Anthropic, Groq, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, or any OpenAI-compatible server via AI_PROVIDER=custom + AI_BASE_URL): all six engines run here, and users can upload their own PDF/DOCX forms. Uploading your own form needs AI.
+- With AI (AI_BASE_URL and AI_MODEL, plus AI_API_KEY if the API needs one — any OpenAI-compatible API such as Groq, OpenAI, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama or LM Studio; set AI_API_STYLE=anthropic for Anthropic, which also requires AI_API_KEY; .env.example lists example base URLs): all six engines run here, and users can upload their own PDF/DOCX forms. Uploading your own form needs AI.
 - With Postgres (DATABASE_URL + JWT_SECRET): accounts. JWT_SECRET is required only when DATABASE_URL is set; with NODE_ENV=production it must not be "change_me" and must be at least 32 characters. If the database can't be reached, the server logs a warning and starts with accounts disabled.
 
 AI cost protection:
@@ -77,7 +77,7 @@ Bash
 npm start        # or: npm run dev (restarts on file changes)
 Endpoints (all JSON unless noted):
 
-GET  /health               → { ai_enabled, auth_enabled, ai_requires_login, … }
+GET  /health               → { ai_enabled, ai_host, ai_model, auth_enabled, ai_requires_login }
 POST /api/analyze-preset   { form_name } → { form_fields, form_name, notice }
 POST /api/analyze-pdf      multipart/form-data, field "file" (PDF or DOCX, max 20 MB) → { form_fields, form_name, notice }
 POST /api/ask              { question, field?, form_name? } → { answer }

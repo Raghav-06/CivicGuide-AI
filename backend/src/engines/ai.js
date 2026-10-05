@@ -1,33 +1,22 @@
 /**
  * Provider-neutral LLM client used by all six engines.
  *
- * Configure with environment variables (see .env.example):
- *   AI_PROVIDER   openai | anthropic | groq | gemini | openrouter | together | mistral | deepseek | xai | ollama | custom
- *   AI_API_KEY    the provider's API key (optional for ollama / custom local servers)
- *   AI_MODEL      any model ID the provider serves
- *   AI_BASE_URL   optional; overrides the provider's API base URL (required for "custom")
+ * Every connection setting comes from the environment (see .env.example):
+ *   AI_BASE_URL   required; the API base URL, e.g. https://api.groq.com/openai/v1
+ *   AI_MODEL      required; any model ID that API serves
+ *   AI_API_KEY    optional; sent as a Bearer token (local servers like Ollama need none).
+ *                 Required when AI_API_STYLE=anthropic.
+ *   AI_API_STYLE  optional; "openai" (default) for any OpenAI-compatible /chat/completions API,
+ *                 or "anthropic" to use the Anthropic SDK (Messages API) with AI_BASE_URL as baseURL
  *   AI_MAX_TOKENS optional; output-token limit per request
  *   AI_EFFORT     optional; reasoning effort for models that support it (e.g. low | medium | high)
  *   AI_TIMEOUT_MS optional; per-request timeout (default 60000)
  *
- * Every provider except Anthropic is called through the OpenAI-compatible
- * Chat Completions API; Anthropic uses its official SDK (Messages API).
+ * Without AI_BASE_URL and AI_MODEL the app runs on its built-in rules.
  */
 import Anthropic from "@anthropic-ai/sdk";
 
-const PROVIDERS = {
-  openai:     { protocol: "openai", baseUrl: "https://api.openai.com/v1", tokenParam: "max_completion_tokens" },
-  groq:       { protocol: "openai", baseUrl: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile" },
-  gemini:     { protocol: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
-  openrouter: { protocol: "openai", baseUrl: "https://openrouter.ai/api/v1" },
-  together:   { protocol: "openai", baseUrl: "https://api.together.xyz/v1" },
-  mistral:    { protocol: "openai", baseUrl: "https://api.mistral.ai/v1" },
-  deepseek:   { protocol: "openai", baseUrl: "https://api.deepseek.com/v1" },
-  xai:        { protocol: "openai", baseUrl: "https://api.x.ai/v1" },
-  ollama:     { protocol: "openai", baseUrl: "http://localhost:11434/v1", keyOptional: true },
-  custom:     { protocol: "openai", keyOptional: true },
-  anthropic:  { protocol: "anthropic" },
-};
+const API_STYLES = ["openai", "anthropic"];
 
 // Claude models that accept Anthropic's server-side refusal fallback ("fallbacks": "default").
 const ANTHROPIC_FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
@@ -51,31 +40,40 @@ Always return structured JSON output.`;
 
 // ── Configuration ───────────────────────────────────────────────────────
 
+/** Hostname of a base URL for logs and /health (never the full URL, which may embed credentials). */
+function hostOf(baseUrl) {
+  try {
+    return new URL(baseUrl).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve the AI settings from the environment. Read on every call so .env edits apply after restart only. */
 export function getAIConfig() {
   const env = process.env;
-  // Backwards compatibility: a bare GROQ_API_KEY (the original setup) means provider "groq".
-  const provider = (env.AI_PROVIDER || (env.GROQ_API_KEY ? "groq" : "")).trim().toLowerCase();
-  const preset = PROVIDERS[provider];
-  const apiKey = env.AI_API_KEY || (provider === "groq" ? env.GROQ_API_KEY : "") || "";
-  const model = (env.AI_MODEL || preset?.defaultModel || "").trim();
-  const baseUrl = (env.AI_BASE_URL || preset?.baseUrl || "").trim().replace(/\/+$/, "");
+  const baseUrl = (env.AI_BASE_URL || "").trim().replace(/\/+$/, "");
+  const model = (env.AI_MODEL || "").trim();
+  const apiKey = (env.AI_API_KEY || "").trim();
+  const style = (env.AI_API_STYLE || "openai").trim().toLowerCase();
   const maxTokens = Number(env.AI_MAX_TOKENS) || null;
   const effort = (env.AI_EFFORT || "").trim() || null;
   const timeoutMs = Number(env.AI_TIMEOUT_MS) || 60000;
+  const host = hostOf(baseUrl);
 
   let problem = null;
-  if (!provider) problem = "AI_PROVIDER is not set";
-  else if (!preset) problem = `Unknown AI_PROVIDER "${provider}". Use one of: ${Object.keys(PROVIDERS).join(", ")}`;
+  if (!baseUrl) problem = "AI_BASE_URL is not set";
+  else if (!host) problem = `AI_BASE_URL is not a valid URL: "${baseUrl}"`;
   else if (!model) problem = "AI_MODEL is not set";
-  else if (!apiKey && !preset.keyOptional) problem = "AI_API_KEY is not set";
-  else if (preset.protocol === "openai" && !baseUrl) problem = "AI_BASE_URL is required for the custom provider";
+  else if (!API_STYLES.includes(style)) problem = `Unknown AI_API_STYLE "${style}". Use one of: ${API_STYLES.join(", ")}`;
+  else if (style === "anthropic" && !apiKey) problem = "AI_API_KEY is required when AI_API_STYLE=anthropic";
 
   return {
-    provider, model, apiKey, baseUrl, maxTokens, effort, timeoutMs,
-    protocol: preset?.protocol,
-    tokenParam: preset?.tokenParam ?? "max_tokens",
-    customBaseUrl: Boolean(env.AI_BASE_URL),
+    host, model, apiKey, baseUrl, maxTokens, effort, timeoutMs,
+    protocol: style,
+    // No provider table: start with max_tokens; chatOpenAICompatible switches to
+    // max_completion_tokens if the API rejects it.
+    tokenParam: "max_tokens",
     enabled: !problem,
     problem,
   };
@@ -83,8 +81,8 @@ export function getAIConfig() {
 
 /** Safe summary for logs and the health endpoint (never includes the key). */
 export function aiStatus() {
-  const { enabled, provider, model, problem } = getAIConfig();
-  return { enabled, provider: provider || null, model: model || null, problem };
+  const { enabled, host, model, problem } = getAIConfig();
+  return { enabled, host: host || null, model: model || null, problem };
 }
 
 // ── Public API ──────────────────────────────────────────────────────────
@@ -196,7 +194,7 @@ async function chatOpenAICompatible(config, { system, prompt, maxTokens, tempera
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
-    throw new Error(`${config.provider} API error ${res.status}: ${message}`);
+    throw new Error(`${config.host} API error ${res.status}: ${message}`);
   }
 }
 
@@ -220,13 +218,9 @@ let anthropicClient;
 let anthropicClientKey;
 
 function getAnthropicClient(config) {
-  const key = `${config.apiKey}|${config.customBaseUrl ? config.baseUrl : ""}|${config.timeoutMs}`;
+  const key = `${config.apiKey}|${config.baseUrl}|${config.timeoutMs}`;
   if (anthropicClientKey !== key) {
-    anthropicClient = new Anthropic({
-      apiKey: config.apiKey,
-      ...(config.customBaseUrl && { baseURL: config.baseUrl }),
-      timeout: config.timeoutMs,
-    });
+    anthropicClient = new Anthropic({ apiKey: config.apiKey, baseURL: config.baseUrl, timeout: config.timeoutMs });
     anthropicClientKey = key;
   }
   return anthropicClient;
@@ -244,7 +238,7 @@ async function chatAnthropic(config, { system, prompt, maxTokens }) {
   };
 
   // On models that support it, let Anthropic re-run a declined request on a fallback model server-side.
-  const response = ANTHROPIC_FALLBACK_MODELS.has(config.model) && !config.customBaseUrl
+  const response = ANTHROPIC_FALLBACK_MODELS.has(config.model) && config.host === "api.anthropic.com"
     ? await client.beta.messages.create({ ...params, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
     : await client.messages.create(params);
 
