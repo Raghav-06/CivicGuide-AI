@@ -2499,3 +2499,39 @@ html { scroll-behavior: smooth; }
 }
 .review-edit-btn:hover { background: var(--accent); }
 .review-edit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Backend status banner (FormSession) ── */
+.backend-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 1rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+.backend-banner-online {
+  background: hsl(142.1, 76.2%, 96%);
+  color: var(--success);
+}
+.backend-banner-neutral {
+  background: var(--muted);
+  color: var(--muted-fg);
+}
+
+/* ── Upload area when AI isn't available (Application) ── */
+.pdf-drop-zone.drop-zone-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background: var(--muted);
+  border-color: var(--border);
+}
+.drop-zone-notice {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: var(--muted-fg);
+  text-align: center;
+  max-width: 28rem;
+  line-height: 1.5;
+}

@@ -10,6 +10,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Probe /health. `online` = the server answered; `aiEnabled` = it has an AI provider configured;
+ * `aiRequiresLogin` = the AI endpoints need a signed-in user (REQUIRE_LOGIN_FOR_AI).
+ */
+export async function getBackendStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return { online: false, aiEnabled: false, aiRequiresLogin: false };
+    const data = await res.json().catch(() => ({}));
+    return { online: true, aiEnabled: data.ai_enabled === true, aiRequiresLogin: data.ai_requires_login === true };
+  } catch {
+    return { online: false, aiEnabled: false, aiRequiresLogin: false };
+  }
+}
+
 /** JSON request to the backend, sending the session cookie. Throws ApiError with the server's `detail`. */
 export async function apiRequest(path, { method = "GET", body } = {}) {
   let res;

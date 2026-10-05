@@ -1,5 +1,7 @@
 import NavAuth from "../components/NavAuth";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { getBackendStatus } from "../api/client";
+import { useAuth } from "../auth/authContext";
 /* ── Icons ── */
 const Shield = ({ size = 24 }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -79,12 +81,28 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
   const [dragOver,           setDragOver]           = useState(false);
   const [uploadError,        setUploadError]        = useState("");
 
+  const [backend,            setBackend]            = useState(null);  // null = checking; else getBackendStatus()
+  const { user } = useAuth();
+
   const fileInputRef = useRef(null);
+
+  /* Uploading your own form needs AI (Engine 1 reads it) — find out before the user tries. */
+  useEffect(() => {
+    let cancelled = false;
+    getBackendStatus().then((status) => { if (!cancelled) setBackend(status); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const uploadBlocked = backend === null ? null
+    : !backend.online ? "Uploading your own form needs the AI backend, which isn't reachable right now. The ready-made forms above work offline."
+    : !backend.aiEnabled ? "Uploading your own form needs AI, which isn't configured on this server. The ready-made forms above work with built-in rules."
+    : backend.aiRequiresLogin && !user ? "Sign in to upload your own form — reading it uses AI. The ready-made forms above work without an account."
+    : null;
 
   /* ── Handle a file object coming from input or drop ── */
   const processFile = (file) => {
     setUploadError("");
-    if (!file) return;
+    if (!file || uploadBlocked) return;
 
     if (!/\.(pdf|docx)$/i.test(file.name)) {
       setUploadError("Only PDF and Word (.docx) files are accepted.");
@@ -232,14 +250,15 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
 
                   {/* Drop zone */}
                   <div
-                    className={`pdf-drop-zone${dragOver ? " drag-active" : ""}`}
-                    onClick={() => fileInputRef.current?.click()}
+                    className={`pdf-drop-zone${dragOver && !uploadBlocked ? " drag-active" : ""}${uploadBlocked ? " drop-zone-disabled" : ""}`}
+                    onClick={() => !uploadBlocked && fileInputRef.current?.click()}
                     onDragOver={onDragOver}
                     onDragLeave={onDragLeave}
                     onDrop={onDrop}
                     role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === "Enter" && fileInputRef.current?.click()}
+                    tabIndex={uploadBlocked ? -1 : 0}
+                    aria-disabled={Boolean(uploadBlocked)}
+                    onKeyDown={(e) => e.key === "Enter" && !uploadBlocked && fileInputRef.current?.click()}
                   >
                     <div className="drop-zone-icon">
                       <Upload size={22} />
@@ -247,8 +266,10 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
                     <p className="drop-zone-title">
                       {dragOver ? "Drop your form here" : "Click to browse or drag & drop"}
                     </p>
-                    <p className="drop-zone-sub">PDF or DOCX · Max 20 MB</p>
+                    <p className="drop-zone-sub">PDF or DOCX · Max 20 MB{uploadBlocked ? " · needs AI" : ""}</p>
                   </div>
+
+                  {uploadBlocked && <p className="drop-zone-notice">{uploadBlocked}</p>}
 
                   {/* Error message */}
                   {uploadError && (

@@ -31,16 +31,33 @@ import { isEmpty, aiStatus } from "./src/engines/ai.js";
 import { answerQuestion } from "./src/engines/assistant.js";
 import { HttpError, route } from "./src/http.js";
 import { migrate } from "./src/db/index.js";
-import authRouter from "./src/routes/auth.js";
+import authRouter, { disabledAuthRouter } from "./src/routes/auth.js";
 
 const PORT = process.env.PORT || 8000;
 const APP_URL = (process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
 
-for (const key of ["DATABASE_URL", "JWT_SECRET"]) {
-  if (!process.env[key]) {
-    console.error(`Missing required environment variable ${key}. See .env.example.`);
+// ── Accounts (optional) ──────────────────────────────────────────────
+// Postgres only backs sign-in. Without it the form flow still works and auth runs in "disabled" mode.
+let authEnabled = false;
+if (process.env.DATABASE_URL) {
+  const secret = process.env.JWT_SECRET ?? "";
+  if (!secret) {
+    console.error("JWT_SECRET is required when DATABASE_URL is set. See .env.example.");
     process.exit(1);
   }
+  if (process.env.NODE_ENV === "production" && (secret === "change_me" || secret.length < 32)) {
+    console.error("JWT_SECRET must be a random string of at least 32 characters in production. See .env.example.");
+    process.exit(1);
+  }
+  try {
+    await migrate();
+    authEnabled = true;
+    console.log("Accounts: enabled (Postgres connected)");
+  } catch (err) {
+    console.warn(`Accounts: disabled — could not connect to Postgres / apply schema (${err.message}). Check DATABASE_URL.`);
+  }
+} else {
+  console.warn("Accounts: disabled — DATABASE_URL is not set. Sign-in is hidden; form filling still works.");
 }
 
 const ai = aiStatus();
@@ -68,12 +85,15 @@ app.use(cookieParser());
 // ══════════════════════════════════════════════════════════════════════════
 
 // ── Auth: email/password (with SMTP verification) + Google sign-in ────
-app.use("/api/auth", authRouter);
+app.use("/api/auth", authEnabled ? authRouter : disabledAuthRouter);
 
 /** Health check — confirms server is running. */
 app.get("/health", (req, res) => {
   const { enabled, provider, model } = aiStatus();
-  res.json({ status: "ok", message: "CiviGuide AI backend is running", ai_enabled: enabled, ai_provider: provider, ai_model: model });
+  res.json({
+    status: "ok", message: "CiviGuide AI backend is running",
+    ai_enabled: enabled, ai_provider: provider, ai_model: model, auth_enabled: authEnabled,
+  });
 });
 
 /** Run Engines 1+2, turning failures into errors the user can act on. */
@@ -241,13 +261,6 @@ if (existsSync(FRONTEND_DIST)) {
   app.use(express.static(FRONTEND_DIST));
   // Client-side routes (e.g. /verify-email) all load index.html.
   app.get(/^\/(?!api\/|health$).*/,(req, res) => res.sendFile(path.join(FRONTEND_DIST, "index.html")));
-}
-
-try {
-  await migrate();
-} catch (err) {
-  console.error("Could not connect to Postgres / apply schema. Check DATABASE_URL.\n", err.message);
-  process.exit(1);
 }
 
 app.listen(PORT, () => {

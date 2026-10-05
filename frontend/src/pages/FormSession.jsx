@@ -1,22 +1,21 @@
 import { useState, useEffect, useRef } from "react";
-import { API_BASE, ApiError, apiRequest } from "../api/client";
+import { API_BASE, ApiError, apiRequest, getBackendStatus } from "../api/client";
+import { useAuth } from "../auth/authContext";
 import NavAuth from "../components/NavAuth";
 /* ══════════════════════════════════════════════════════════════════════
    API LAYER
    All calls go to the Express backend (backend/server.js).
-   If the server is offline, falls back to local static mode.
+   If the server is offline — or online without an AI provider — the
+   engines run locally; only PDF generation still uses the server.
    ══════════════════════════════════════════════════════════════════════ */
 
 function apiFetch(endpoint, body) {
   return apiRequest(endpoint, { method: "POST", body });
 }
 
-/* Check if backend is up */
-async function checkBackend() {
-  try {
-    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(2000) });
-    return res.ok;
-  } catch { return false; }
+/* Is the backend up, and does it have AI? → { online, aiEnabled, aiRequiresLogin } */
+function checkBackend() {
+  return getBackendStatus();
 }
 
 /* ── Engine 1+2: Analyze preset form by name ── */
@@ -28,7 +27,7 @@ async function apiAnalyzePreset(formName) {
 async function apiAnalyzePDF(file) {
   const formData = new FormData();
   formData.append("file", file);
-  const res = await fetch(`${API_BASE}/api/analyze-pdf`, { method: "POST", body: formData });
+  const res = await fetch(`${API_BASE}/api/analyze-pdf`, { method: "POST", body: formData, credentials: "include" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.detail ?? `Form analysis failed (${res.status})`, res.status, data.code);
   return data;
@@ -64,10 +63,11 @@ async function apiScore(formFields, filledAnswers, validationResult) {
   });
 }
 
-/* ── PDF download via backend (reportlab) ── */
+/* ── PDF download via backend (pdfkit) ── */
 async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, formName) {
   const res = await fetch(`${API_BASE}/api/generate-pdf`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       form_fields: formFields,
@@ -291,27 +291,108 @@ function localScore(formFields, fieldValues, validation) {
   };
 }
 
-/* ── Local next-question generator (offline Engine 2 equivalent) ── */
-function localProcessAnswer(field, userInput, fieldValues) {
-  const val   = userInput.trim();
-  const key   = field.field;
-  const primary   = { [key]: val };
-  const derived   = {};
+/* ── Local answer parsing (offline Engine 2+3 equivalent) ── */
+const UNCERTAIN_RE = /\b(around|about|approx(?:imately|\.)?|maybe|roughly)\b/i;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const AMOUNT_UNITS = {
+  k: 1e3, thousand: 1e3, thousands: 1e3,
+  l: 1e5, lac: 1e5, lacs: 1e5, lakh: 1e5, lakhs: 1e5,
+  cr: 1e7, crore: 1e7, crores: 1e7,
+  million: 1e6,
+};
 
-  // Derive annual from monthly income
-  if (key === "monthly_income") {
-    const n = Number(val.replace(/[^0-9.]/g, ""));
-    if (!isNaN(n) && n > 0 && !fieldValues.annual_income) {
-      derived.annual_income = String(n * 12);
+/* "20k", "20,000", "₹ 25000", "around 20 thousand", "1.5 lakh", "2 lakhs", "1 crore" → number (or null). */
+function parseAmount(text) {
+  const s = String(text).toLowerCase()
+    .replace(/(\d),(?=\d)/g, "$1")
+    .replace(/₹|\brs\.?|\binr\b|\brupees?\b/g, " ");
+  const m = s.match(/(\d+(?:\.\d+)?)\s*(k|thousands?|lakhs?|lacs?|l|crores?|cr|million)?\b/);
+  if (!m) return null;
+  const n = Number(m[1]) * (AMOUNT_UNITS[m[2]] ?? 1);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+/* 15-8-1990, 15.08.1990, 1990-08-15, 15 Aug 1990, Aug 15 1990 → "DD/MM/YYYY" (or null). */
+function parseDateDMY(text) {
+  const s = String(text).trim();
+  let d, mo, y, m;
+  if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/)))                         [, y, mo, d] = m;
+  else if ((m = s.match(/^(\d{1,2})[-/.\s](\d{1,2})[-/.\s](\d{4})$/)))                [, d, mo, y] = m;
+  else if ((m = s.match(/^(\d{1,2})(?:st|nd|rd|th)?[\s-]+([a-z]{3,})\.?,?[\s-]+(\d{4})$/i))) {
+    d = m[1]; mo = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase()) + 1; y = m[3];
+  } else if ((m = s.match(/^([a-z]{3,})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/i))) {
+    mo = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase()) + 1; d = m[2]; y = m[3];
+  } else return null;
+  [d, mo, y] = [Number(d), Number(mo), Number(y)];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  if (!mo || date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return null;
+  return `${String(d).padStart(2, "0")}/${String(mo).padStart(2, "0")}/${y}`;
+}
+
+/* Strip spaces/dashes and a leading +91 / 0. */
+function normalisePhone(text) {
+  let s = String(text).replace(/[\s\-().]/g, "");
+  if (s.startsWith("+91")) s = s.slice(3);
+  else if (/^0091\d{10}$/.test(s)) s = s.slice(4);
+  else if (/^91\d{10}$/.test(s)) s = s.slice(2);
+  else if (/^0\d{10}$/.test(s)) s = s.slice(1);
+  return s;
+}
+
+/* Match a select answer to its canonical option: exact (any case) first, then a single option named in the text. */
+function matchOption(options, text) {
+  const lower = String(text).trim().toLowerCase();
+  const exact = options.find(o => String(o).trim().toLowerCase() === lower);
+  if (exact !== undefined) return exact;
+  const named = options.filter(o => new RegExp(`\\b${String(o).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(lower));
+  return named.length === 1 ? named[0] : null;
+}
+
+/* Returns the same shape as the backend's /api/process-answer. */
+function localProcessAnswer(field, userInput, fieldValues, formFields = []) {
+  const val     = userInput.trim();
+  const key     = field.field;
+  const label   = field.label || key;
+  const primary = { [key]: val };
+  const derived = {};
+  const result  = {
+    primary_field: primary, derived_fields: derived,
+    uncertainty_detected: UNCERTAIN_RE.test(val),
+    clarification_needed: false, clarification_question: null,
+  };
+  const clarify = (question) => ({ ...result, clarification_needed: true, clarification_question: question });
+  const onForm  = (k) => formFields.some(f => f.field === k);
+
+  if (field.type === "number") {
+    let n = parseAmount(val);
+    if (n === null) return clarify(`I couldn't find a number in that. What is your ${label}? Please enter it in digits, e.g. 25000.`);
+    // Monthly income given as a yearly figure ("3 lakh per year"): store the monthly share.
+    if (key === "monthly_income" && /\b(year|yearly|annual(ly)?|per annum|p\.?a\.?)\b/i.test(val)) {
+      if (onForm("annual_income") && !isFilled(fieldValues.annual_income)) derived.annual_income = n;
+      n = Math.round(n / 12);
     }
-  }
-  // Normalise Yes/No
-  if (field.type === "boolean") {
+    primary[key] = n;
+    if (key === "monthly_income" && onForm("annual_income") && !isFilled(fieldValues.annual_income) && derived.annual_income === undefined) {
+      derived.annual_income = n * 12;
+    }
+  } else if (field.type === "date") {
+    const date = parseDateDMY(val);
+    if (!date) return clarify(`Please give the ${label} as DD/MM/YYYY, e.g. 15/08/1990.`);
+    primary[key] = date;
+  } else if (field.type === "phone") {
+    primary[key] = normalisePhone(val);
+  } else if (field.type === "boolean") {
     const lower = val.toLowerCase();
-    primary[key] = lower.startsWith("y") ? "Yes" : lower.startsWith("n") ? "No" : val;
+    primary[key] = /^(y|yes|haan|ha)\b/.test(lower) ? "Yes" : /^(n|no|nahi|nope)\b/.test(lower) ? "No" : val;
+  } else if (field.type === "email") {
+    primary[key] = val.toLowerCase();
+  } else if (field.options?.length) {
+    const option = matchOption(field.options, val);
+    if (option === null) return clarify(`Please choose one of: ${field.options.join(", ")}.`);
+    primary[key] = option;
   }
 
-  return { primary_field: primary, derived_fields: derived };
+  return result;
 }
 
 function getFallbackFields(formName) {
@@ -517,7 +598,12 @@ export default function FormSession({
   const [showMobilePreview, setShowMobilePreview] = useState(false);
 
   /* ── Backend state ── */
-  const [backendOnline,     setBackendOnline]     = useState(null);  // null=checking
+  const [backendOnline,     setBackendOnline]     = useState(null);  // null=checking; used for PDF generation
+  const [aiActive,          setAiActive]          = useState(false); // backend has AI → Engines 1–6 run there
+  const [aiNeedsLogin,      setAiNeedsLogin]      = useState(false); // AI exists but this server requires sign-in
+  const { user } = useAuth();
+  const userRef = useRef(user);   // read at session start; changing it mustn't restart the session
+  useEffect(() => { userRef.current = user; }, [user]);
   const [loadingFields,     setLoadingFields]     = useState(true);
   const [formFields,        setFormFields]        = useState([]);    // schema from Engine 1+2
   const [fieldValues,       setFieldValues]       = useState({});    // { field_key: value }
@@ -583,16 +669,22 @@ export default function FormSession({
       setDocRecommendations(null);
       setPdfError("");
 
-      const online = await checkBackend();
+      const status = await checkBackend();
       if (cancelled) return;
+      const online = status.online;
+      const needsLogin = status.aiEnabled && status.aiRequiresLogin && !userRef.current;
+      const ai = status.aiEnabled && !needsLogin;
       setBackendOnline(online);
+      setAiActive(ai);
+      setAiNeedsLogin(needsLogin);
 
       const formNameLabel = uploadedFile?.name ?? selectedForm;
       let fields = [];
       let fromAI = false;
       let loadError = null;
+      let analysisNotice = null;
 
-      if (online) {
+      if (ai) {
         try {
           setMessages([{ role: "system", text: `📄 Analysing ${formNameLabel} with AI…` }]);
           const result = uploadedFile?.file
@@ -601,6 +693,7 @@ export default function FormSession({
           if (cancelled) return;
           fields = result.form_fields ?? [];
           fromAI = fields.length > 0;
+          analysisNotice = result.notice ?? null;
         } catch (err) {
           console.warn("AI field load failed:", err);
           loadError = err.message;
@@ -620,9 +713,11 @@ export default function FormSession({
           { role: "system", text: `📄 ${formNameLabel}` },
           {
             role: "ai",
-            text: online
+            text: ai
               ? `I couldn't analyse **${formNameLabel}**.\n\n${loadError ?? "No fillable fields were found."}\n\nYou can try another file, or choose one of the ready-made forms from **Start Application**.`
-              : `Analysing your own form needs the AI backend, which isn't reachable right now.\n\nStart the backend server and try again, or choose one of the ready-made forms from **Start Application** — those work offline.`,
+              : online
+                ? `Analysing your own form needs AI, which ${needsLogin ? "requires you to sign in on this server" : "isn't configured on this server"}.\n\nChoose one of the ready-made forms from **Start Application** — those work with built-in rules.`
+                : `Analysing your own form needs the AI backend, which isn't reachable right now.\n\nStart the backend server and try again, or choose one of the ready-made forms from **Start Application** — those work offline.`,
           },
         ]);
         return;
@@ -630,13 +725,16 @@ export default function FormSession({
 
       const howTo = "Answer in your own words. Type **skip** to skip a question, or **help** if you're not sure what to enter.";
       const intro = fromAI
-        ? `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language.\n\n${howTo}`
-        : online
+        ? `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language.` +
+          (analysisNotice ? `\n\n⚠ ${analysisNotice}` : "") + `\n\n${howTo}`
+        : ai
           ? `AI analysis isn't available right now, so I've loaded the standard **${formNameLabel}** fields instead (${fields.length} fields).\n\n${howTo}`
-          : `I've loaded **${formNameLabel}** (${fields.length} fields).\n\n⚡ Running in offline mode — start the backend server for AI-powered extraction.\n\n${howTo}`;
+          : online
+            ? `I've loaded **${formNameLabel}** (${fields.length} fields).\n\nAI isn't ${needsLogin ? "available until you sign in" : "configured on this server"}, so I'll use built-in rules to read your answers — write amounts like **25000** or **20k** and dates as **DD/MM/YYYY**.\n\n${howTo}`
+            : `I've loaded **${formNameLabel}** (${fields.length} fields).\n\n⚡ Running in offline mode — start the backend server for AI-powered extraction.\n\n${howTo}`;
 
       setMessages([
-        { role: "system", text: `📄 Form session: ${formNameLabel}${online ? " · AI Active" : " · Offline Mode"}` },
+        { role: "system", text: `📄 Form session: ${formNameLabel}${ai ? " · AI Active" : online ? " · Built-in rules" : " · Offline Mode"}` },
         { role: "ai", text: intro },
         { role: "ai", text: questionFor(fields[0]) },
       ]);
@@ -665,7 +763,7 @@ export default function FormSession({
     addMessage("ai",
       (prefix ? prefix + "\n\n" : "") +
       `✅ Interview complete — **${answered} of ${formFields.length} fields** answered.\n\n` +
-      (backendOnline ? "Running AI validation and document analysis…" : "Running local validation…"));
+      (aiActive ? "Running AI validation and document analysis…" : "Running local validation…"));
     runPostFillPipeline(values);
   };
 
@@ -706,7 +804,7 @@ export default function FormSession({
     if (help) {
       setIsTyping(true);
       let answer;
-      if (backendOnline) {
+      if (aiActive) {
         try {
           answer = await apiAsk(
             help.question ?? `What does the field "${label}" mean, and what should I enter?`,
@@ -723,29 +821,20 @@ export default function FormSession({
     /* ── an answer ── */
     setIsTyping(true);
 
-    let primaryField  = { [field.field]: trimmed };
-    let derivedFields = {};
-    let clarification = null;
-    let uncertainty   = false;
-
-    if (backendOnline) {
+    let result = null;
+    if (aiActive) {
       try {
-        const result = await apiProcessAnswer(field, trimmed, formFields, fieldValues);
-        primaryField  = result.primary_field  ?? primaryField;
-        derivedFields = result.derived_fields ?? {};
-        clarification = result.clarification_needed ? result.clarification_question : null;
-        uncertainty   = result.uncertainty_detected ?? false;
+        result = await apiProcessAnswer(field, trimmed, formFields, fieldValues);
       } catch (err) {
         console.warn("process-answer API failed, using local fallback:", err);
-        const local = localProcessAnswer(field, trimmed, fieldValues);
-        primaryField  = local.primary_field;
-        derivedFields = local.derived_fields;
       }
-    } else {
-      const local = localProcessAnswer(field, trimmed, fieldValues);
-      primaryField  = local.primary_field;
-      derivedFields = local.derived_fields;
     }
+    result ??= localProcessAnswer(field, trimmed, fieldValues, formFields);
+
+    let primaryField  = result.primary_field ?? { [field.field]: trimmed };
+    let derivedFields = result.derived_fields ?? {};
+    let clarification = result.clarification_needed ? (result.clarification_question || `Could you tell me your ${label} again?`) : null;
+    let uncertainty   = result.uncertainty_detected ?? false;
 
     setIsTyping(false);
 
@@ -808,7 +897,7 @@ export default function FormSession({
     try {
       let val, docs, score;
 
-      if (backendOnline) {
+      if (aiActive) {
         // ── Online path: Engines 4 + 5 are independent; Engine 6 needs Engine 4's result ──
         [val, docs] = await Promise.all([
           apiValidate(formFields, answers),
@@ -835,7 +924,7 @@ export default function FormSession({
       const risk      = score?.risk_level ?? "medium";
       const riskEmoji = risk === "low" ? "🟢" : risk === "medium" ? "🟡" : "🔴";
 
-      let summary = `**${backendOnline ? "AI" : "Local"} Analysis Complete**\n\n`;
+      let summary = `**${aiActive ? "AI" : "Local"} Analysis Complete**\n\n`;
       summary += `${riskEmoji} Confidence Score: **${scoreVal}/100** (${risk.toUpperCase()} risk)\n`;
       if (errCount > 0)  summary += `❌ ${errCount} validation error(s) found\n`;
       if (warnCount > 0) summary += `⚠ ${warnCount} warning(s)\n`;
@@ -849,7 +938,7 @@ export default function FormSession({
         addMessage("ai", `Validation issues:\n\n${errList}\n\nUse **Edit** next to a field in the review panel to fix it.`);
       }
 
-      if (backendOnline && docs?.summary) {
+      if (aiActive && docs?.summary) {
         addMessage("ai", `📁 **Documents needed:** ${docs.summary}\n\nSee the documents panel below to attach each one.`);
       }
 
@@ -969,10 +1058,18 @@ export default function FormSession({
           </div>
         )}
       </nav>
-      {backendOnline === true && (
+      {backendOnline === true && aiActive && (
         <div className="backend-banner backend-banner-online">
           <SparkleIcon size={14} />
           <span>AI backend connected — all 6 engines active</span>
+        </div>
+      )}
+      {backendOnline === true && !aiActive && !loadingFields && (
+        <div className="backend-banner backend-banner-neutral">
+          <CircleAlert size={14} />
+          <span>{aiNeedsLogin
+            ? "Sign in to use AI — running with built-in rules"
+            : "AI not configured — running with built-in rules"}</span>
         </div>
       )}
 
@@ -1028,7 +1125,7 @@ export default function FormSession({
                     <div className="typing-dots">
                       <span /><span /><span />
                     </div>
-                    {pipelineRunning && <span style={{ fontSize: "0.7rem", color: "var(--muted-fg)", marginLeft: 6 }}>Running {backendOnline ? "AI" : "local"} analysis…</span>}
+                    {pipelineRunning && <span style={{ fontSize: "0.7rem", color: "var(--muted-fg)", marginLeft: 6 }}>Running {aiActive ? "AI" : "local"} analysis…</span>}
                   </div>
                 </div>
               )}
@@ -1303,7 +1400,7 @@ export default function FormSession({
             {interviewDone && (
               <p style={{ fontSize: "0.75rem", color: "var(--muted-fg)", marginTop: -4 }}>
                 📎 {filledCount}/{totalFields} fields · {Object.keys(docUploads).length} doc(s) attached
-                {validation ? (backendOnline ? " · AI-validated" : " · locally validated") : " · validating…"}
+                {validation ? (aiActive ? " · AI-validated" : " · locally validated") : " · validating…"}
               </p>
             )}
           </div>

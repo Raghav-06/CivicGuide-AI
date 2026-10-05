@@ -2,9 +2,10 @@ import { useAuth } from "../auth/authContext";
 
 /* Nav-bar auth control: "Sign in" button, or the signed-in user with a "Sign out" link. */
 export default function NavAuth() {
-  const { user, loading, openAuth, logout } = useAuth();
+  const { user, loading, authEnabled, openAuth, logout } = useAuth();
 
-  if (loading) return null;
+  // No accounts on this server (no database configured): nothing to sign in to.
+  if (loading || !authEnabled) return null;
 
   if (!user) {
     return (

@@ -99,7 +99,7 @@ router.get("/me", route(async (req, res) => {
 
 /** Public config the frontend needs (e.g. whether Google sign-in is enabled). */
 router.get("/config", (req, res) => {
-  res.json({ google_client_id: process.env.GOOGLE_CLIENT_ID || null });
+  res.json({ google_client_id: process.env.GOOGLE_CLIENT_ID || null, auth_enabled: true });
 });
 
 router.post("/signup", authLimiter, route(async (req, res) => {
@@ -259,3 +259,12 @@ router.post("/logout", (req, res) => {
 });
 
 export default router;
+
+/**
+ * Stand-in mounted when there is no database: the app still works without accounts.
+ * The probes the frontend makes on load succeed; everything else is a 503.
+ */
+export const disabledAuthRouter = express.Router();
+disabledAuthRouter.get("/me", (req, res) => res.json({ user: null }));
+disabledAuthRouter.get("/config", (req, res) => res.json({ google_client_id: null, auth_enabled: false }));
+disabledAuthRouter.use((req, res) => res.status(503).json({ detail: "Accounts are not configured on this server." }));

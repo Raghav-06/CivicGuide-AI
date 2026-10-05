@@ -7,6 +7,7 @@ export default function AuthProvider({ children }) {
   const [user,           setUser]           = useState(null);
   const [loading,        setLoading]        = useState(true);
   const [googleClientId, setGoogleClientId] = useState(null);
+  const [authEnabled,    setAuthEnabled]    = useState(false);  // false until the server says accounts exist
   const [modalMode,      setModalMode]      = useState(null);   // null | "login" | "signup"
 
   /* Restore the session and load public auth config on startup. */
@@ -16,7 +17,11 @@ export default function AuthProvider({ children }) {
       .then(([me, config]) => {
         if (cancelled) return;
         if (me.status === "fulfilled")     setUser(me.value.user);
-        if (config.status === "fulfilled") setGoogleClientId(config.value.google_client_id);
+        if (config.status === "fulfilled") {
+          setGoogleClientId(config.value.google_client_id);
+          // Older servers don't send auth_enabled; they always had accounts.
+          setAuthEnabled(config.value.auth_enabled !== false);
+        }
         setLoading(false);
       });
     return () => { cancelled = true; };
@@ -30,6 +35,7 @@ export default function AuthProvider({ children }) {
   const value = useMemo(() => ({
     user,
     loading,
+    authEnabled,
     googleClientId,
     openAuth,
     closeAuth,
@@ -54,7 +60,7 @@ export default function AuthProvider({ children }) {
       await post("/api/auth/logout").catch(() => {});
       setUser(null);
     },
-  }), [user, loading, googleClientId, openAuth, closeAuth]);
+  }), [user, loading, authEnabled, googleClientId, openAuth, closeAuth]);
 
   return (
     <AuthContext.Provider value={value}>
