@@ -1,4 +1,4 @@
-import { askAI, parseJSON, isEmpty } from "./ai.js";
+import { askAI, parseJSON, isEmpty, quoteData } from "./ai.js";
 
 /**
  * Input:  form schema, answers, validation result
@@ -58,7 +58,8 @@ export async function calculateScore(formFields, filledAnswers, validationResult
 Form completion: ${Math.trunc(completionRate * 100)}%
 Validation errors: ${errorCount}
 Warnings: ${warningCount}
-Filled answers: ${JSON.stringify(filledAnswers)}
+Filled answers:
+${quoteData("form_answers", JSON.stringify(filledAnswers))}
 
 Give a brief 1-sentence recommendation for the applicant.
 Also flag any suspicious patterns or missing important info.

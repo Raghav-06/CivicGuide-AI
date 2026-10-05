@@ -1,4 +1,4 @@
-import { askAI, parseJSON, isEmpty } from "./ai.js";
+import { askAI, parseJSON, isEmpty, quoteData } from "./ai.js";
 import { canonicalOption, parseDate } from "./fields.js";
 
 // AI findings that aren't about one field (e.g. "the form as a whole") are kept under these names.
@@ -68,7 +68,8 @@ export async function validateLogic(formFields, filledAnswers) {
 Check these filled form answers for logical contradictions and inconsistencies.
 
 Form schema: ${JSON.stringify(formFields)}
-Filled answers: ${JSON.stringify(filledAnswers)}
+Filled answers:
+${quoteData("form_answers", JSON.stringify(filledAnswers))}
 
 Check for issues like:
 - Age requirements (e.g. must be 18+ for certain applications)

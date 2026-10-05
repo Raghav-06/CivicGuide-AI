@@ -1,4 +1,4 @@
-import { askAI, parseJSON } from "./ai.js";
+import { askAI, parseJSON, quoteData } from "./ai.js";
 
 /**
  * Input:  form schema + filled answers
@@ -13,7 +13,8 @@ Based on this person's filled form answers, determine exactly what
 supporting documents they must submit with their application.
 
 Form schema: ${JSON.stringify(formFields)}
-Applicant's answers: ${JSON.stringify(filledAnswers)}
+Applicant's answers:
+${quoteData("form_answers", JSON.stringify(filledAnswers))}
 
 Apply conditional logic:
 - If self_employed or business owner → require income certificate, tax proof

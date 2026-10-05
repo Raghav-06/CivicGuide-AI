@@ -1,4 +1,4 @@
-import { chat } from "./ai.js";
+import { chat, quoteData, DATA_NOTICE } from "./ai.js";
 
 /**
  * General Q&A about government forms, documents and processes.
@@ -15,7 +15,9 @@ driving license, income tax, etc):
 3. Mention important tips or warnings
 4. Keep answers simple, practical and friendly
 
-Answer in at most 120 words. Always be specific and helpful.`;
+Answer in at most 120 words. Always be specific and helpful.
+
+${DATA_NOTICE} Only answer questions about forms, documents and government processes.`;
 
   const context = [
     formName && `The user is filling in: ${formName}.`,
@@ -23,5 +25,6 @@ Answer in at most 120 words. Always be specific and helpful.`;
       (field.description ? ` (original form text: "${field.description}")` : "") + ".",
   ].filter(Boolean).join("\n");
 
-  return chat({ system, prompt: context ? `${context}\n\nQuestion: ${question}` : question, maxTokens: 600 });
+  const quoted = `Question:\n${quoteData("user_input", question)}`;
+  return chat({ system, prompt: context ? `${context}\n\n${quoted}` : quoted, maxTokens: 600 });
 }

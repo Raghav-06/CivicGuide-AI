@@ -19,12 +19,13 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { analyzeFormDetailed, processAnswer, validateForm, getDocuments, scoreSubmission } from "./src/core.js";
-import { readFormBuffer } from "./src/formReader.js";
+import { readFormBuffer, detectFormType } from "./src/formReader.js";
 import { generateFilledPDF } from "./src/formOutput.js";
 import { PRESET_FORM_TEXTS } from "./src/presets.js";
 import { isEmpty, aiStatus } from "./src/engines/ai.js";
@@ -33,7 +34,7 @@ import {
   HttpError, route, readFields, readAnswers, readObject, readField, readText, attachmentHeader,
 } from "./src/http.js";
 import { migrate } from "./src/db/index.js";
-import authRouter, { disabledAuthRouter } from "./src/routes/auth.js";
+import authRouter, { disabledAuthRouter, requireAuth } from "./src/routes/auth.js";
 
 const PORT = process.env.PORT || 8000;
 const APP_URL = (process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
@@ -62,6 +63,13 @@ if (process.env.DATABASE_URL) {
   console.warn("Accounts: disabled — DATABASE_URL is not set. Sign-in is hidden; form filling still works.");
 }
 
+// Optional: only signed-in users may call the AI endpoints (protects the AI key from anonymous use).
+const REQUIRE_LOGIN_FOR_AI = process.env.REQUIRE_LOGIN_FOR_AI === "true";
+if (REQUIRE_LOGIN_FOR_AI && !authEnabled) {
+  console.error("REQUIRE_LOGIN_FOR_AI=true needs accounts, but the database isn't available. Set DATABASE_URL or turn it off.");
+  process.exit(1);
+}
+
 const ai = aiStatus();
 if (ai.enabled) {
   console.log(`AI: ${ai.provider} · ${ai.model}`);
@@ -71,8 +79,31 @@ if (ai.enabled) {
 
 const FRONTEND_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../frontend/dist");
 
+const MAX_UPLOAD_MB = 20;
+
 const app = express();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: 1 } });
+
+// Behind a reverse proxy (Render, Nginx, …) set TRUST_PROXY so rate limits see client IPs, not the proxy's.
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set("trust proxy", Number.isInteger(hops) ? hops : process.env.TRUST_PROXY);
+}
+
+// ── Cost protection for the AI endpoints ────────────────────────────
+const limiter = (windowMinutes, limit, detail) => rateLimit({
+  windowMs: windowMinutes * 60 * 1000,
+  limit,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { detail },
+});
+const aiLimiter = limiter(5, Number(process.env.AI_RATE_LIMIT) || 60,
+  "You're sending requests too quickly. Please wait a few minutes and try again.");
+const uploadLimiter = limiter(15, Number(process.env.AI_UPLOAD_RATE_LIMIT) || 10,
+  "Too many form uploads. Please wait a few minutes before analysing another file.");
+/** Middleware for every AI-backed endpoint: rate limit, then (optionally) require sign-in. */
+const aiGuard = REQUIRE_LOGIN_FOR_AI ? [aiLimiter, requireAuth] : [aiLimiter];
 
 // Allow the React dev server (port 5173/3000) and any localhost origin
 app.use(cors({
@@ -94,7 +125,8 @@ app.get("/health", (req, res) => {
   const { enabled, provider, model } = aiStatus();
   res.json({
     status: "ok", message: "CiviGuide AI backend is running",
-    ai_enabled: enabled, ai_provider: provider, ai_model: model, auth_enabled: authEnabled,
+    ai_enabled: enabled, ai_provider: provider, ai_model: model,
+    auth_enabled: authEnabled, ai_requires_login: REQUIRE_LOGIN_FOR_AI,
   });
 });
 
@@ -113,7 +145,7 @@ async function analyzeOrExplain(formText) {
 const presetCache = new Map();
 
 // ── Engine 1+2: Analyze a preset form by name ─────────────────────────
-app.post("/api/analyze-preset", route(async (req, res) => {
+app.post("/api/analyze-preset", aiGuard, route(async (req, res) => {
   const formName = req.body?.form_name;
   const formText = PRESET_FORM_TEXTS[formName];
   if (!formText) throw new HttpError(404, `Unknown preset form: ${formName}`);
@@ -124,16 +156,25 @@ app.post("/api/analyze-preset", route(async (req, res) => {
 }));
 
 // ── Engine 1+2: Analyze an uploaded PDF or DOCX ──────────────────────
-app.post("/api/analyze-pdf", upload.single("file"), route(async (req, res) => {
+app.post("/api/analyze-pdf", uploadLimiter, aiGuard, upload.single("file"), route(async (req, res) => {
   const file = req.file;
-  if (!file || !/\.(pdf|docx)$/i.test(file.originalname)) {
+  if (!file) throw new HttpError(400, "Please choose a PDF or DOCX file to upload.");
+  // Decided by the file's content (and MIME type / extension), so a misnamed file still works.
+  if (!detectFormType(file.buffer, file.originalname, file.mimetype)) {
     throw new HttpError(400, "Only PDF and DOCX files are accepted.");
   }
 
   let formText;
   try {
-    formText = await readFormBuffer(file.buffer, file.originalname);
+    formText = await readFormBuffer(file.buffer, file.originalname, file.mimetype);
   } catch (err) {
+    if (err.code === "PDF_PASSWORD") {
+      throw new HttpError(422, "This PDF is password-protected. Remove the password (e.g. print it to a new PDF) and upload it again.");
+    }
+    if (err.code === "PDF_CORRUPT" || err.code === "DOCX_CORRUPT") {
+      throw new HttpError(422, "This file seems to be damaged or isn't a real PDF/DOCX. Try exporting it again and re-uploading.");
+    }
+    console.warn("Form read failed:", err);
     throw new HttpError(422, `Couldn't read this file: ${err.message}`);
   }
   if (formText.length < 20) {
@@ -145,7 +186,7 @@ app.post("/api/analyze-pdf", upload.single("file"), route(async (req, res) => {
 }));
 
 // ── Assistant: free-form questions about forms and documents ─────────
-app.post("/api/ask", route(async (req, res) => {
+app.post("/api/ask", aiGuard, route(async (req, res) => {
   const question = readText(req.body, "question", { label: "your question" });
   const formName = typeof req.body?.form_name === "string" ? req.body.form_name.slice(0, 200) : undefined;
   const field = req.body?.field ? readField(req.body) : undefined;
@@ -160,9 +201,9 @@ app.post("/api/ask", route(async (req, res) => {
 }));
 
 // ── Engine 2+3: Process a single answer ──────────────────────────────
-app.post("/api/process-answer", route(async (req, res) => {
+app.post("/api/process-answer", aiGuard, route(async (req, res) => {
   const field = readField(req.body);
-  const user_input = readText(req.body, "user_input", { label: "an answer" });
+  const user_input = readText(req.body, "user_input", { label: "your answer" });
   const form_fields = readFields(req.body);
   const context = readAnswers(req.body, "context");
   try {
@@ -182,7 +223,7 @@ app.post("/api/process-answer", route(async (req, res) => {
 }));
 
 // ── Engine 4: Validate form ───────────────────────────────────────────
-app.post("/api/validate", route(async (req, res) => {
+app.post("/api/validate", aiGuard, route(async (req, res) => {
   const form_fields = readFields(req.body);
   const filled_answers = readAnswers(req.body);
   try {
@@ -194,7 +235,7 @@ app.post("/api/validate", route(async (req, res) => {
 }));
 
 // ── Engine 5: Document recommendations ───────────────────────────────
-app.post("/api/documents", route(async (req, res) => {
+app.post("/api/documents", aiGuard, route(async (req, res) => {
   const form_fields = readFields(req.body);
   const filled_answers = readAnswers(req.body);
   try {
@@ -214,7 +255,7 @@ app.post("/api/documents", route(async (req, res) => {
 }));
 
 // ── Engine 6: Score submission ────────────────────────────────────────
-app.post("/api/score", route(async (req, res) => {
+app.post("/api/score", aiGuard, route(async (req, res) => {
   const form_fields = readFields(req.body);
   const filled_answers = readAnswers(req.body);
   const validation_result = readObject(req.body, "validation_result");
@@ -260,6 +301,13 @@ app.post("/api/generate-pdf", route(async (req, res) => {
 // ── Error handler — renders {"detail": "...", "code"?: "..."} ─────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    err = err.code === "LIMIT_FILE_SIZE"
+      ? new HttpError(413, `File is too large. Maximum is ${MAX_UPLOAD_MB} MB.`)
+      : new HttpError(400, err.code === "LIMIT_UNEXPECTED_FILE"
+        ? "Upload a single file in the 'file' field."
+        : `Upload failed: ${err.message}`);
+  }
   const status = err.status ?? 500;
   if (status >= 500) console.error(err);
   res.status(status).json(status >= 500 && !err.status
