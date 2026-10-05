@@ -11,7 +11,7 @@ import { askAI, parseJSON } from "./ai.js";
  * May also derive related fields (e.g. monthly income → annual income).
  */
 export async function mapToSchema(formFields, userInput, currentField, context) {
-  const schemaSummary = formFields.map((f) => ({ field: f.field, type: f.type, label: f.label }));
+  const schemaSummary = formFields.map((f) => ({ field: f.field, type: f.type, label: f.label, options: f.options ?? undefined }));
 
   const prompt = `Map this user's response to the correct government form schema fields.
 
@@ -25,7 +25,9 @@ Tasks:
 2. Check if any OTHER fields can be derived from this answer
    (e.g. "I earn 20k/month" → also derives annual_income = 240000)
 3. Handle synonyms (e.g. "shop owner" → "self_employed")
-4. Resolve enums to valid options
+4. Resolve enums to valid options, spelled exactly as in "options"
+5. Format dates as DD/MM/YYYY and numbers as plain digits (no currency symbols or commas)
+6. Only use field names that appear in the schema; never invent new fields
 
 Return ONLY this JSON:
 {

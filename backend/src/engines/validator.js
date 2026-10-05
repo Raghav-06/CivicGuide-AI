@@ -1,4 +1,8 @@
 import { askAI, parseJSON, isEmpty } from "./ai.js";
+import { canonicalOption, parseDate } from "./fields.js";
+
+// AI findings that aren't about one field (e.g. "the form as a whole") are kept under these names.
+const GENERAL_FIELDS = new Set(["", "general", "form", "overall", "all", "multiple", "none"]);
 
 /** Quick format checks without AI. */
 export function validateFormat(field, value) {
@@ -32,7 +36,15 @@ export function validateFormat(field, value) {
                   severity: "error", reason: "Must be a number." });
   }
 
-  if (field.type === "select" && field.options?.length && !field.options.includes(str)) {
+  if (field.type === "date" && !/^\d{1,2}\/\d{1,2}\/\d{4}$|^\d{4}-\d{1,2}-\d{1,2}$/.test(str.trim())) {
+    errors.push({ field: field.field, type: "invalid_format",
+                  severity: "error", reason: "Use the DD/MM/YYYY format, e.g. 15/08/1990." });
+  } else if (field.type === "date" && !parseDate(str)) {
+    errors.push({ field: field.field, type: "invalid_format",
+                  severity: "error", reason: "This date doesn't exist — check the day and month." });
+  }
+
+  if (field.type === "select" && field.options?.length && !field.options.includes(canonicalOption(field, str))) {
     errors.push({ field: field.field, type: "invalid_option", severity: "error",
                   reason: `'${value}' is not valid. Options: ${field.options.join(", ")}` });
   }
@@ -75,11 +87,17 @@ Return ONLY this JSON:
   ]
 }`;
 
+  // Keep AI findings only when they point at a field on this form (or at the form in general).
+  const known = new Set(formFields.map((f) => f.field));
+  const relevant = (items) => (Array.isArray(items) ? items : [])
+    .filter((e) => e && typeof e === "object" && typeof e.reason === "string" && e.reason.trim())
+    .filter((e) => known.has(e.field) || GENERAL_FIELDS.has(String(e.field ?? "").trim().toLowerCase()));
+
   let warnings = [];
   try {
     const aiResult = parseJSON(await askAI(prompt));
-    allErrors.push(...(aiResult.logical_errors ?? []));
-    warnings = aiResult.warnings ?? [];
+    allErrors.push(...relevant(aiResult.logical_errors).map((e) => ({ ...e, severity: "error" })));
+    warnings = relevant(aiResult.warnings).map((w) => ({ ...w, severity: "warning" }));
   } catch {
     warnings = [];
   }

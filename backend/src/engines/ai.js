@@ -99,9 +99,9 @@ export async function chat({ system, prompt, maxTokens = 2048, temperature }) {
     : chatOpenAICompatible(config, { system, prompt, maxTokens, temperature });
 }
 
-/** Engine-facing helper: compliance system prompt, low temperature. */
-export function askAI(prompt) {
-  return chat({ system: SYSTEM_PROMPT, prompt, maxTokens: 2048, temperature: 0.1 });
+/** Engine-facing helper: compliance system prompt, low temperature. `maxTokens` = output budget. */
+export function askAI(prompt, { maxTokens = 2048 } = {}) {
+  return chat({ system: SYSTEM_PROMPT, prompt, maxTokens, temperature: 0.1 });
 }
 
 /**

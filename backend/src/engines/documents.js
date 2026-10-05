@@ -33,7 +33,15 @@ Return ONLY this JSON:
 }`;
 
   try {
-    return parseJSON(await askAI(prompt));
+    const result = parseJSON(await askAI(prompt));
+    // Document names are used as keys in the UI: drop unnamed entries and duplicates.
+    const seen = new Set();
+    result.required_documents = (Array.isArray(result.required_documents) ? result.required_documents : [])
+      .filter((d) => d && typeof d.name === "string" && d.name.trim())
+      .map((d) => ({ ...d, name: d.name.trim(), mandatory: d.mandatory !== false }))
+      .filter((d) => !seen.has(d.name.toLowerCase()) && seen.add(d.name.toLowerCase()));
+    if (!Array.isArray(result.tips)) result.tips = [];
+    return result;
   } catch {
     return {
       required_documents: [

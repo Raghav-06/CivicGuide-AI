@@ -23,7 +23,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { analyzeForm, processAnswer, validateForm, getDocuments, scoreSubmission } from "./src/core.js";
+import { analyzeFormDetailed, processAnswer, validateForm, getDocuments, scoreSubmission } from "./src/core.js";
 import { readFormBuffer } from "./src/formReader.js";
 import { generateFilledPDF } from "./src/formOutput.js";
 import { PRESET_FORM_TEXTS } from "./src/presets.js";
@@ -101,7 +101,7 @@ app.get("/health", (req, res) => {
 /** Run Engines 1+2, turning failures into errors the user can act on. */
 async function analyzeOrExplain(formText) {
   try {
-    return await analyzeForm(formText);
+    return await analyzeFormDetailed(formText);
   } catch (err) {
     if (err.message.startsWith("No form fields")) throw new HttpError(422, err.message);
     console.error("Form analysis failed:", err);
@@ -119,7 +119,8 @@ app.post("/api/analyze-preset", route(async (req, res) => {
   if (!formText) throw new HttpError(404, `Unknown preset form: ${formName}`);
 
   if (!presetCache.has(formName)) presetCache.set(formName, await analyzeOrExplain(formText));
-  res.json({ form_fields: presetCache.get(formName), form_name: formName });
+  const { fields, notice } = presetCache.get(formName);
+  res.json({ form_fields: fields, form_name: formName, notice });
 }));
 
 // ── Engine 1+2: Analyze an uploaded PDF or DOCX ──────────────────────
@@ -139,8 +140,8 @@ app.post("/api/analyze-pdf", upload.single("file"), route(async (req, res) => {
     throw new HttpError(422, "No text found in this file. If it's a scanned image, upload a text-based PDF or DOCX instead.");
   }
 
-  const fields = await analyzeOrExplain(formText);
-  res.json({ form_fields: fields, form_name: file.originalname });
+  const { fields, notice } = await analyzeOrExplain(formText);
+  res.json({ form_fields: fields, form_name: file.originalname, notice });
 }));
 
 // ── Assistant: free-form questions about forms and documents ─────────
@@ -221,7 +222,7 @@ app.post("/api/score", route(async (req, res) => {
     res.json(await scoreSubmission(form_fields, filled_answers, validation_result));
   } catch (err) {
     console.error("score failed:", err);
-    const filledCount = Object.values(filled_answers).filter((v) => !isEmpty(v)).length;
+    const filledCount = form_fields.filter((f) => !isEmpty(filled_answers[f.field])).length;
     const total = Math.max(form_fields.length, 1);
     const pct = Math.trunc((filledCount / total) * 100);
     res.json({

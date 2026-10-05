@@ -41,7 +41,8 @@ export async function calculateScore(formFields, filledAnswers, validationResult
   }
 
   // Deduct for overall completion rate
-  const filledCount = Object.values(filledAnswers).filter((v) => !isEmpty(v)).length;
+  // Count schema fields only: extra keys in filledAnswers must not push this past 100%.
+  const filledCount = formFields.filter((f) => !isEmpty(filledAnswers[f.field])).length;
   const completionRate = totalFields > 0 ? filledCount / totalFields : 0;
   if (completionRate < 0.7) {
     const deduction = Math.trunc((0.7 - completionRate) * 50);
