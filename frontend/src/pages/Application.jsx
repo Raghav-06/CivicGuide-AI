@@ -1,3 +1,4 @@
+import NavAuth from "../components/NavAuth";
 import { useState, useRef } from "react";
 /* ── Icons ── */
 const Shield = ({ size = 24 }) => (
@@ -54,10 +55,10 @@ const FORMS = [
 /* ── Helpers ── */
 const flatBtn = { background: "none", border: "none", cursor: "pointer", padding: 0 };
 
-/* Derive a friendly form title from a PDF filename */
+/* Derive a friendly form title from a PDF / DOCX filename */
 function labelFromFilename(filename) {
   return filename
-    .replace(/\.pdf$/i, "")
+    .replace(/\.(pdf|docx)$/i, "")
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .trim();
@@ -68,8 +69,9 @@ function labelFromFilename(filename) {
    Props:
      onSelectForm(formLabel)  — navigate to FormSession
      onGoHome()               — navigate back to landing
+     onGoHowItWorks()         — navigate to the landing page's "How It Works" section
    ═══════════════════════════════════════ */
-export default function Application({ onSelectForm, onGoHome }) {
+export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) {
   const [mobileOpen,         setMobileOpen]         = useState(false);
   const [showMobilePreview,  setShowMobilePreview]  = useState(false);
   const [selectedForm,       setSelectedForm]       = useState(null);  // label string
@@ -84,8 +86,8 @@ export default function Application({ onSelectForm, onGoHome }) {
     setUploadError("");
     if (!file) return;
 
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      setUploadError("Only PDF files are accepted. Please choose a .pdf file.");
+    if (!/\.(pdf|docx)$/i.test(file.name)) {
+      setUploadError("Only PDF and Word (.docx) files are accepted.");
       return;
     }
     if (file.size > 20 * 1024 * 1024) {
@@ -131,7 +133,7 @@ export default function Application({ onSelectForm, onGoHome }) {
     if (onSelectForm) onSelectForm(label);
   };
 
-  /* Start with uploaded PDF */
+  /* Start with uploaded form */
   const startWithUpload = () => {
     if (uploadedFile && onSelectForm) onSelectForm(uploadedFile.label, uploadedFile);
   };
@@ -151,9 +153,10 @@ export default function Application({ onSelectForm, onGoHome }) {
 
           <div className="nav-links hide-mobile">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
-            <button style={flatBtn} className="nav-link">How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
             <button style={flatBtn} className="nav-link">Start Application</button>
             <button className="btn-primary" style={{ height: 36, padding: "0 12px" }}>Get Started</button>
+            <NavAuth />
           </div>
 
           <button className="nav-mobile-btn hide-desktop" onClick={() => setMobileOpen(o => !o)}>
@@ -164,9 +167,10 @@ export default function Application({ onSelectForm, onGoHome }) {
         {mobileOpen && (
           <div className="nav-mobile-menu hide-desktop">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
-            <button style={flatBtn} className="nav-link">How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
             <button style={flatBtn} className="nav-link">Start Application</button>
             <button className="btn-primary" style={{ height: 40, padding: "0 16px" }}>Get Started</button>
+            <NavAuth />
           </div>
         )}
       </nav>
@@ -184,7 +188,7 @@ export default function Application({ onSelectForm, onGoHome }) {
 
               <h3 className="upload-title">Upload or Select a Form</h3>
               <p className="upload-desc">
-                Choose a government form below, or upload your own PDF — our AI will guide you through every field.
+                Choose a government form below, or upload your own PDF or Word form — our AI will guide you through every field.
               </p>
 
               {/* ── Form cards ── */}
@@ -210,7 +214,7 @@ export default function Application({ onSelectForm, onGoHome }) {
               {/* ── Divider ── */}
               <div className="divider-or">
                 <div className="divider-line" />
-                <span className="divider-text">or upload your own PDF</span>
+                <span className="divider-text">or upload your own form</span>
                 <div className="divider-line" />
               </div>
 
@@ -221,7 +225,7 @@ export default function Application({ onSelectForm, onGoHome }) {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="application/pdf,.pdf"
+                    accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx"
                     style={{ display: "none" }}
                     onChange={onInputChange}
                   />
@@ -241,9 +245,9 @@ export default function Application({ onSelectForm, onGoHome }) {
                       <Upload size={22} />
                     </div>
                     <p className="drop-zone-title">
-                      {dragOver ? "Drop your PDF here" : "Click to browse or drag & drop"}
+                      {dragOver ? "Drop your form here" : "Click to browse or drag & drop"}
                     </p>
-                    <p className="drop-zone-sub">PDF only · Max 20 MB</p>
+                    <p className="drop-zone-sub">PDF or DOCX · Max 20 MB</p>
                   </div>
 
                   {/* Error message */}
@@ -259,7 +263,7 @@ export default function Application({ onSelectForm, onGoHome }) {
                   </div>
                   <div className="uploaded-pill-info">
                     <span className="uploaded-pill-name">{uploadedFile.name}</span>
-                    <span className="uploaded-pill-meta">{uploadedFile.size} · PDF uploaded successfully</span>
+                    <span className="uploaded-pill-meta">{uploadedFile.size} · uploaded successfully</span>
                   </div>
                   <button className="uploaded-pill-clear" onClick={clearFile} title="Remove file">
                     <XIcon size={14} />
@@ -297,7 +301,7 @@ export default function Application({ onSelectForm, onGoHome }) {
                 <>
                   <p className="preview-panel-empty-title">📄 {uploadedFile.name}</p>
                   <p className="preview-panel-empty-desc" style={{ color: "var(--success)", fontWeight: 600 }}>
-                    ✓ PDF uploaded · {uploadedFile.size}
+                    ✓ Form uploaded · {uploadedFile.size}
                   </p>
                   <p className="preview-panel-empty-desc" style={{ marginTop: 8 }}>
                     Click "Start Filling" to begin the AI-guided session
@@ -311,7 +315,7 @@ export default function Application({ onSelectForm, onGoHome }) {
               ) : (
                 <>
                   <p className="preview-panel-empty-title">No form selected yet</p>
-                  <p className="preview-panel-empty-desc">Upload a PDF or choose a form above to get started</p>
+                  <p className="preview-panel-empty-desc">Upload a PDF / DOCX or choose a form above to get started</p>
                 </>
               )}
             </div>

@@ -84,3 +84,23 @@ Generated:
   "monthly_income": 20000,
   "annual_income": 240000
 }
+
+---
+
+## ⚙️ Getting Started
+
+```bash
+npm run setup                          # install root, backend and frontend dependencies
+cp backend/.env.example backend/.env   # then fill it in (see below)
+npm run dev                            # backend on :8000 + frontend on :5173
+```
+
+Open http://localhost:5173. The Vite dev server proxies `/api` to the backend, so both run as one app.
+
+In `backend/.env`:
+- **AI** — `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`: any provider (OpenAI, Anthropic, Groq, Gemini, OpenRouter, Together, Mistral, DeepSeek, xAI, Ollama, or any OpenAI-compatible server via `custom` + `AI_BASE_URL`) and any model it serves. Without them the app runs on built-in offline fallbacks.
+- **Database** — `DATABASE_URL` (PostgreSQL; tables are created on startup) and `JWT_SECRET`.
+- **Email verification** — `SMTP_*` (optional in development: links are printed to the console).
+- **Google sign-in** — `GOOGLE_CLIENT_ID` (optional).
+
+Production: `npm run build` then `npm start` — the backend serves the built frontend on one port.

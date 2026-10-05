@@ -1,7 +1,7 @@
+node_modules/
 .env
 .direnv/
 .envsrc
 shell.nix
 sample_form.txt
-__pyache_
-engines/__pyache_
+*.pdf

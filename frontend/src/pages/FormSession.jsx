@@ -1,19 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import { API_BASE, ApiError, apiRequest } from "../api/client";
+import NavAuth from "../components/NavAuth";
 /* ══════════════════════════════════════════════════════════════════════
    API LAYER
-   All calls go to the FastAPI backend (server.py).
+   All calls go to the Express backend (backend/server.js).
    If the server is offline, falls back to local static mode.
    ══════════════════════════════════════════════════════════════════════ */
-const API_BASE = "http://localhost:8000";
 
-async function apiFetch(endpoint, body) {
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${endpoint} returned ${res.status}`);
-  return res.json();
+function apiFetch(endpoint, body) {
+  return apiRequest(endpoint, { method: "POST", body });
 }
 
 /* Check if backend is up */
@@ -29,13 +24,20 @@ async function apiAnalyzePreset(formName) {
   return apiFetch("/api/analyze-preset", { form_name: formName });
 }
 
-/* ── Engine 1+2: Analyze uploaded PDF ── */
+/* ── Engine 1+2: Analyze uploaded PDF / DOCX ── */
 async function apiAnalyzePDF(file) {
   const formData = new FormData();
   formData.append("file", file);
   const res = await fetch(`${API_BASE}/api/analyze-pdf`, { method: "POST", body: formData });
-  if (!res.ok) throw new Error(`PDF analysis failed: ${res.status}`);
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.detail ?? `Form analysis failed (${res.status})`, res.status, data.code);
+  return data;
+}
+
+/* ── Assistant: answer a question about the current field / form ── */
+async function apiAsk(question, field, formName) {
+  const { answer } = await apiFetch("/api/ask", { question, field, form_name: formName });
+  return answer;
 }
 
 /* ── Engine 2+3: Process a single answer ── */
@@ -316,8 +318,15 @@ function getFallbackFields(formName) {
   return FALLBACK_FIELDS[formName] ?? FALLBACK_FIELDS["Passport Application"];
 }
 
+/* Generic checklist for uploaded forms that have no preset documents. */
+const GENERIC_DOCS = [
+  { name: "Identity Proof (Aadhaar / Voter ID / PAN)", reason: "Required for all applications", mandatory: true },
+  { name: "Address Proof", reason: "Required for all applications", mandatory: true },
+  { name: "Passport-size Photograph", reason: "Usually required on the application", mandatory: false },
+];
+
 function getFallbackDocDefs(formName) {
-  return FALLBACK_DOCS[formName] ?? FALLBACK_DOCS["Passport Application"];
+  return FALLBACK_DOCS[formName] ?? GENERIC_DOCS;
 }
 
 /* ── FIX #1: Added missing getFallbackDocNames function ── */
@@ -327,6 +336,59 @@ function getFallbackDocNames(formName) {
 
 function getFallbackTips(formName) {
   return FALLBACK_TIPS[formName] ?? [];
+}
+
+/* ── Field-state helpers ── */
+function isFilled(value) {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function formatValue(value) {
+  if (value === true)  return "Yes";
+  if (value === false) return "No";
+  return String(value);
+}
+
+/* First field at or after `from` that has no value yet (fields can be filled early by derivation). */
+function nextUnfilledIndex(formFields, values, from) {
+  for (let i = from; i < formFields.length; i++) {
+    if (!isFilled(values[formFields[i].field])) return i;
+  }
+  return formFields.length;
+}
+
+function questionFor(field) {
+  return field.simplified_question ?? field.label ?? `What is your ${field.field.replace(/_/g, " ")}?`;
+}
+
+/* Is this chat message a question for the assistant rather than an answer? */
+function parseHelpRequest(text) {
+  const lower = text.toLowerCase();
+  if (lower === "help" || lower === "?") return { question: null };
+  const m = text.match(/^help[\s:,-]+(.+)$/i);
+  if (m) return { question: m[1].trim() };
+  // A multi-word sentence ending in "?" is a question, not an answer.
+  if (text.endsWith("?") && text.split(/\s+/).length >= 3) return { question: text };
+  return null;
+}
+
+/* Offline explanation of a field (no AI available). */
+function localFieldHelp(field) {
+  const parts = [];
+  if (field.description && field.description !== field.label) parts.push(`On the official form this reads: "${field.description}".`);
+  const formats = {
+    date:    "Use the DD/MM/YYYY format, e.g. 15/08/1990.",
+    phone:   "Enter a 10-digit mobile number, e.g. 9876543210.",
+    email:   "Enter an email address, e.g. name@example.com.",
+    number:  "Enter a number only, e.g. 25000.",
+    boolean: "Answer Yes or No.",
+  };
+  if (formats[field.type]) parts.push(formats[field.type]);
+  if (field.options?.length) parts.push(`Valid options: ${field.options.join(", ")}.`);
+  parts.push(field.required
+    ? "This field is required for submission."
+    : "This field is optional — type **skip** if it doesn't apply to you.");
+  return parts.join("\n");
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -448,6 +510,7 @@ export default function FormSession({
   uploadedFile  = null,   // { name, file } — real File object from Application.jsx
   onGoHome,
   onGoApplication,
+  onGoHowItWorks,
 }) {
   /* ── UI state ── */
   const [mobileOpen,        setMobileOpen]        = useState(false);
@@ -464,6 +527,9 @@ export default function FormSession({
   const [input,             setInput]             = useState("");
   const [isTyping,          setIsTyping]          = useState(false);
   const [currentFieldIdx,   setCurrentFieldIdx]   = useState(0);
+  const [interviewDone,     setInterviewDone]     = useState(false); // every field answered or skipped
+  const [editingIdx,        setEditingIdx]        = useState(null);  // re-answering one field after the interview
+  const [aiFields,          setAiFields]          = useState(false); // fields came from Engine 1+2 (not static fallback)
 
   /* ── Bottom panel state (Engine 4–6) ── */
   const [docUploads,        setDocUploads]        = useState({});
@@ -475,14 +541,16 @@ export default function FormSession({
   const [pdfError,          setPdfError]          = useState("");
 
   const chatRef      = useRef(null);
-  const docInputRefs = useRef({});
+  const docInputRef  = useRef(null);   // one hidden file input shared by every document row
+  const pendingDoc   = useRef(null);   // which document row opened the file picker
 
   /* ── Derived ── */
-  const filledCount  = Object.keys(fieldValues).length;
+  // Count only schema fields — derived values can add keys that aren't on the form.
+  const filledCount  = formFields.filter(f => isFilled(fieldValues[f.field])).length;
   const totalFields  = formFields.length;
   const progress     = totalFields > 0 ? Math.round((filledCount / totalFields) * 100) : 0;
   const confidence   = scoreData?.submission_confidence_score ?? progress;
-  const allDone      = totalFields > 0 && filledCount >= totalFields;
+  const busy         = isTyping || pipelineRunning;
   const confColor    = confidence >= 80 ? "var(--success)" : confidence >= 55 ? "var(--warning)" : "hsl(0,84%,60%)";
 
   /* ── Doc names to show — use Engine 5 recommendations if available, else fallback ── */
@@ -506,6 +574,9 @@ export default function FormSession({
       setFormFields([]);
       setFieldValues({});
       setCurrentFieldIdx(0);
+      setInterviewDone(false);
+      setEditingIdx(null);
+      setAiFields(false);
       setDocUploads({});
       setValidation(null);
       setScoreData(null);
@@ -516,45 +587,58 @@ export default function FormSession({
       if (cancelled) return;
       setBackendOnline(online);
 
+      const formNameLabel = uploadedFile?.name ?? selectedForm;
       let fields = [];
-      let formNameLabel = selectedForm;
+      let fromAI = false;
+      let loadError = null;
 
       if (online) {
         try {
-          setMessages([{ role: "system", text: `📄 Loading form fields from AI…` }]);
-
-          let result;
-          if (uploadedFile?.file) {
-            // User uploaded a real PDF — analyze it
-            result = await apiAnalyzePDF(uploadedFile.file);
-            formNameLabel = uploadedFile.name ?? selectedForm;
-          } else {
-            // Preset card selected
-            result = await apiAnalyzePreset(selectedForm);
-          }
-
+          setMessages([{ role: "system", text: `📄 Analysing ${formNameLabel} with AI…` }]);
+          const result = uploadedFile?.file
+            ? await apiAnalyzePDF(uploadedFile.file)   // user's own PDF / DOCX
+            : await apiAnalyzePreset(selectedForm);    // preset card
           if (cancelled) return;
           fields = result.form_fields ?? [];
+          fromAI = fields.length > 0;
         } catch (err) {
-          console.warn("AI field load failed, falling back:", err);
-          fields = getFallbackFields(selectedForm);
+          console.warn("AI field load failed:", err);
+          loadError = err.message;
         }
-      } else {
-        fields = getFallbackFields(selectedForm);
       }
+
+      // Preset forms have built-in fields to fall back on; an uploaded form has nothing to fall back to.
+      if (!fromAI && !uploadedFile?.file) fields = getFallbackFields(selectedForm);
 
       if (cancelled) return;
       setFormFields(fields);
+      setAiFields(fromAI);
       setLoadingFields(false);
 
-      const intro = online
-        ? `I've loaded your **${formNameLabel}** form using AI analysis.\n\nI found **${fields.length} fields**. I'll ask you each one in simple language — just answer naturally and I'll handle the formatting.`
-        : `I've loaded **${formNameLabel}**.\n\n⚡ Running in offline mode — start the backend server for AI-powered extraction.\n\nI'll guide you through **${fields.length} fields**.`;
+      if (fields.length === 0) {
+        setMessages([
+          { role: "system", text: `📄 ${formNameLabel}` },
+          {
+            role: "ai",
+            text: online
+              ? `I couldn't analyse **${formNameLabel}**.\n\n${loadError ?? "No fillable fields were found."}\n\nYou can try another file, or choose one of the ready-made forms from **Start Application**.`
+              : `Analysing your own form needs the AI backend, which isn't reachable right now.\n\nStart the backend server and try again, or choose one of the ready-made forms from **Start Application** — those work offline.`,
+          },
+        ]);
+        return;
+      }
+
+      const howTo = "Answer in your own words. Type **skip** to skip a question, or **help** if you're not sure what to enter.";
+      const intro = fromAI
+        ? `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language.\n\n${howTo}`
+        : online
+          ? `AI analysis isn't available right now, so I've loaded the standard **${formNameLabel}** fields instead (${fields.length} fields).\n\n${howTo}`
+          : `I've loaded **${formNameLabel}** (${fields.length} fields).\n\n⚡ Running in offline mode — start the backend server for AI-powered extraction.\n\n${howTo}`;
 
       setMessages([
         { role: "system", text: `📄 Form session: ${formNameLabel}${online ? " · AI Active" : " · Offline Mode"}` },
         { role: "ai", text: intro },
-        { role: "ai", text: fields[0]?.simplified_question ?? fields[0]?.label ?? "Let's begin. What is your full name?" },
+        { role: "ai", text: questionFor(fields[0]) },
       ]);
     }
 
@@ -562,19 +646,81 @@ export default function FormSession({
     return () => { cancelled = true; };
   }, [selectedForm, uploadedFile]);
 
+  const addMessage = (role, text) => setMessages(prev => [...prev, { role, text }]);
+
+  /* Move on after field `fromIdx` was answered or skipped: ask the next empty field, or finish. */
+  const advance = (fromIdx, values, prefix) => {
+    // After editing a single answer, go straight back to the review.
+    const nextIdx = editingIdx !== null ? formFields.length : nextUnfilledIndex(formFields, values, fromIdx + 1);
+    setEditingIdx(null);
+    setCurrentFieldIdx(nextIdx);
+
+    if (nextIdx < formFields.length) {
+      addMessage("ai", (prefix ? prefix + "\n\n" : "") + questionFor(formFields[nextIdx]));
+      return;
+    }
+
+    setInterviewDone(true);
+    const answered = formFields.filter(f => isFilled(values[f.field])).length;
+    addMessage("ai",
+      (prefix ? prefix + "\n\n" : "") +
+      `✅ Interview complete — **${answered} of ${formFields.length} fields** answered.\n\n` +
+      (backendOnline ? "Running AI validation and document analysis…" : "Running local validation…"));
+    runPostFillPipeline(values);
+  };
+
   /* ══════════════════════════════════════════════════════════════════
      SEND MESSAGE — Engine 2+3 (online) or localProcessAnswer (offline)
+     Also handles the "skip" and "help" commands.
      ══════════════════════════════════════════════════════════════════ */
-  const handleSend = useCallback(async () => {
+  const handleSend = async () => {
     const trimmed = input.trim();
-    if (!trimmed || isTyping || allDone || formFields.length === 0) return;
+    if (!trimmed || busy || interviewDone || formFields.length === 0) return;
 
-    const fieldIdx   = currentFieldIdx;
-    const field      = formFields[fieldIdx];
+    const fieldIdx = currentFieldIdx;
+    const field    = formFields[fieldIdx];
     if (!field) return;
+    const label    = field.label || field.field;
 
-    setMessages(prev => [...prev, { role: "user", text: trimmed }]);
+    addMessage("user", trimmed);
     setInput("");
+
+    /* ── skip ── */
+    if (trimmed.toLowerCase() === "skip") {
+      if (editingIdx !== null) {
+        setEditingIdx(null);
+        setCurrentFieldIdx(formFields.length);
+        setInterviewDone(true);
+        addMessage("ai", `Okay — kept your existing answer for **${label}**.`);
+        return;
+      }
+      const note = field.required
+        ? `⏭ Skipped **${label}**. It's required, so you'll need to fill it in before submitting — use **Edit** in the review panel.`
+        : `⏭ Skipped **${label}**.`;
+      advance(fieldIdx, fieldValues, note);
+      return;
+    }
+
+    /* ── help / questions ── */
+    const help = parseHelpRequest(trimmed);
+    if (help) {
+      setIsTyping(true);
+      let answer;
+      if (backendOnline) {
+        try {
+          answer = await apiAsk(
+            help.question ?? `What does the field "${label}" mean, and what should I enter?`,
+            field, selectedForm);
+        } catch (err) {
+          console.warn("ask API failed, using local help:", err);
+        }
+      }
+      setIsTyping(false);
+      addMessage("ai", `${answer ?? localFieldHelp(field)}\n\n${questionFor(field)}`);
+      return;
+    }
+
+    /* ── an answer ── */
     setIsTyping(true);
 
     let primaryField  = { [field.field]: trimmed };
@@ -590,78 +736,84 @@ export default function FormSession({
         clarification = result.clarification_needed ? result.clarification_question : null;
         uncertainty   = result.uncertainty_detected ?? false;
       } catch (err) {
-        // FIX #2: Fall back to local processing if API call fails while online
         console.warn("process-answer API failed, using local fallback:", err);
         const local = localProcessAnswer(field, trimmed, fieldValues);
         primaryField  = local.primary_field;
         derivedFields = local.derived_fields;
       }
     } else {
-      // FIX #2: Always use localProcessAnswer in offline mode (was previously unused)
       const local = localProcessAnswer(field, trimmed, fieldValues);
       primaryField  = local.primary_field;
       derivedFields = local.derived_fields;
     }
 
-    // If AI wants clarification
+    setIsTyping(false);
+
+    // AI wants clarification — stay on this field
     if (clarification) {
-      setIsTyping(false);
-      setMessages(prev => [...prev, { role: "ai", text: `🤔 ${clarification}` }]);
+      addMessage("ai", `🤔 ${clarification}`);
       return;
     }
 
-    // Commit values
-    const newFieldValues = { ...fieldValues, ...primaryField, ...derivedFields };
+    // Commit: the primary answer always wins; derived values only fill fields that are still empty.
+    const newFieldValues = { ...fieldValues };
+    for (const [k, v] of Object.entries(derivedFields)) {
+      if (k !== field.field && !isFilled(newFieldValues[k])) newFieldValues[k] = v;
+    }
+    Object.assign(newFieldValues, primaryField);
     setFieldValues(newFieldValues);
 
-    const savedValue = Object.values(primaryField)[0] ?? trimmed;
-    const nextIdx    = fieldIdx + 1;
-    setCurrentFieldIdx(nextIdx);
-    setIsTyping(false);
-
-    // Derived field notice
-    const derivedNotices = Object.entries(derivedFields)
-      .filter(([k]) => k !== field.field)
-      .map(([k, v]) => `↳ Also derived **${k}** = ${v}`)
-      .join("\n");
-
-    if (nextIdx < formFields.length) {
-      const nextField = formFields[nextIdx];
-      const nextQ     = nextField.simplified_question ?? nextField.label ?? `What is your ${nextField.field.replace(/_/g, " ")}?`;
-      const notice    = uncertainty ? `⚠ Noted with uncertainty: "${savedValue}"\n\n` : `✅ Got it — **${field.label || field.field}**: "${savedValue}"\n\n`;
-      setMessages(prev => [...prev, {
-        role: "ai",
-        text: notice + (derivedNotices ? derivedNotices + "\n\n" : "") + nextQ,
-      }]);
-    } else {
-      // ALL FIELDS DONE — run pipeline (online: full AI pipeline; offline: local engines)
-      setMessages(prev => [...prev, {
-        role: "ai",
-        text: `✅ All **${totalFields} fields** are complete!\n\n${backendOnline ? "Running AI validation and document analysis…" : "Running local validation…"}`,
-      }]);
-      runPostFillPipeline(newFieldValues);
+    // Engines 4–6 results are stale once an answer changes.
+    if (editingIdx !== null) {
+      setValidation(null);
+      setScoreData(null);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, isTyping, allDone, formFields, currentFieldIdx, fieldValues, backendOnline]);
+
+    const savedValue = formatValue(Object.values(primaryField)[0] ?? trimmed);
+    const derivedNotices = Object.entries(derivedFields)
+      .filter(([k]) => k !== field.field && newFieldValues[k] === derivedFields[k] && !isFilled(fieldValues[k]))
+      .map(([k, v]) => `↳ Also filled **${formFields.find(f => f.field === k)?.label ?? k}** = ${formatValue(v)}`)
+      .join("\n");
+    const notice = uncertainty
+      ? `⚠ Noted with uncertainty — **${label}**: "${savedValue}". You can change it later in the review panel.`
+      : `✅ Got it — **${label}**: "${savedValue}"`;
+
+    advance(fieldIdx, newFieldValues, notice + (derivedNotices ? "\n" + derivedNotices : ""));
+  };
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
+  /* Re-open one field from the review panel. */
+  const startEdit = (idx) => {
+    if (busy || !formFields[idx]) return;
+    const field = formFields[idx];
+    const current = fieldValues[field.field];
+    setEditingIdx(idx);
+    setCurrentFieldIdx(idx);
+    setInterviewDone(false);
+    addMessage("ai",
+      `Let's update **${field.label || field.field}**` +
+      (isFilled(current) ? ` (currently "${formatValue(current)}")` : "") +
+      `. Type **skip** to keep it as it is.\n\n${questionFor(field)}`);
+  };
+
   /* ══════════════════════════════════════════════════════════════════
      POST-FILL PIPELINE — Engines 4, 5, 6 (online) or local equivalents (offline)
-     FIX #3: Offline mode now runs localValidate + localScore instead of returning early
      ══════════════════════════════════════════════════════════════════ */
-  const runPostFillPipeline = useCallback(async (answers) => {
+  const runPostFillPipeline = async (answers) => {
     setPipelineRunning(true);
 
     try {
       let val, docs, score;
 
       if (backendOnline) {
-        // ── Online path: call all three API engines ──
-        val   = await apiValidate(formFields, answers);
-        docs  = await apiDocuments(formFields, answers);
+        // ── Online path: Engines 4 + 5 are independent; Engine 6 needs Engine 4's result ──
+        [val, docs] = await Promise.all([
+          apiValidate(formFields, answers),
+          apiDocuments(formFields, answers),
+        ]);
         score = await apiScore(formFields, answers, val);
 
         setValidation(val);
@@ -671,17 +823,9 @@ export default function FormSession({
         // ── Offline path: use local equivalents ──
         val   = localValidate(formFields, answers);
         score = localScore(formFields, answers, val);
-        // No local equivalent for Engine 5 — fallback doc names come from FALLBACK_DOCS
-        docs  = {
-          required_documents: getFallbackDocDefs(selectedForm),
-          summary: null,
-          estimated_processing_time: null,
-          tips: getFallbackTips(selectedForm),
-        };
-
+        // No local Engine 5 — the documents panel falls back to FALLBACK_DOCS
         setValidation(val);
         setScoreData(score);
-        // Don't overwrite docRecommendations in offline mode — let docNames fallback handle it
       }
 
       // ── Post results to chat ──
@@ -697,60 +841,48 @@ export default function FormSession({
       if (warnCount > 0) summary += `⚠ ${warnCount} warning(s)\n`;
       if (errCount === 0 && warnCount === 0) summary += `✅ No validation issues\n`;
       if (score?.recommendation) summary += `\n💡 ${score.recommendation}`;
+      addMessage("ai", summary);
 
-      setMessages(prev => [...prev, { role: "ai", text: summary }]);
-
-      // If there are errors, list them
       if (errCount > 0 && val.errors?.length) {
-        const errList = val.errors.map(e => `• **${e.field}**: ${e.reason}`).join("\n");
-        setMessages(prev => [...prev, { role: "ai", text: `Validation issues:\n\n${errList}` }]);
+        const labelOf = (key) => formFields.find(f => f.field === key)?.label ?? key;
+        const errList = val.errors.map(e => `• **${labelOf(e.field)}**: ${e.reason}`).join("\n");
+        addMessage("ai", `Validation issues:\n\n${errList}\n\nUse **Edit** next to a field in the review panel to fix it.`);
       }
 
       if (backendOnline && docs?.summary) {
-        setMessages(prev => [...prev, { role: "ai", text: `📁 **Documents needed:** ${docs.summary}\n\nSee the documents panel below to upload each one.` }]);
+        addMessage("ai", `📁 **Documents needed:** ${docs.summary}\n\nSee the documents panel below to attach each one.`);
       }
 
     } catch (err) {
       console.warn("Post-fill pipeline error:", err);
-      // If online pipeline fails, attempt local fallback
-      if (backendOnline) {
-        try {
-          const val   = localValidate(formFields, answers);
-          const score = localScore(formFields, answers, val);
-          setValidation(val);
-          setScoreData(score);
-          setMessages(prev => [...prev, { role: "ai", text: "⚠ AI analysis failed — showing local validation results instead." }]);
-        } catch (localErr) {
-          console.warn("Local fallback also failed:", localErr);
-        }
-      }
+      // If the online pipeline fails, fall back to local validation
+      const val   = localValidate(formFields, answers);
+      const score = localScore(formFields, answers, val);
+      setValidation(val);
+      setScoreData(score);
+      addMessage("ai", `⚠ AI analysis failed — showing local validation results instead. Confidence: **${score.submission_confidence_score}/100**.`);
     } finally {
       setPipelineRunning(false);
     }
-  }, [backendOnline, formFields, selectedForm]);
+  };
 
   /* ══════════════════════════════════════════════════════════════════
      DOCUMENT UPLOAD (per row)
      ══════════════════════════════════════════════════════════════════ */
   const triggerDocUpload = (docName) => {
-    if (!docInputRefs.current[docName]) {
-      const inp = document.createElement("input");
-      inp.type = "file";
-      inp.accept = "application/pdf,image/*";
-      inp.style.display = "none";
-      inp.addEventListener("change", (e) => {
-        const file = e.target.files?.[0];
-        if (file) {
-          const sizeKB = Math.round(file.size / 1024);
-          const sizeText = sizeKB > 1024 ? `${(sizeKB/1024).toFixed(1)} MB` : `${sizeKB} KB`;
-          setDocUploads(prev => ({ ...prev, [docName]: { name: file.name, size: sizeText } }));
-        }
-        inp.value = "";
-      });
-      document.body.appendChild(inp);
-      docInputRefs.current[docName] = inp;
+    pendingDoc.current = docName;
+    docInputRef.current?.click();
+  };
+
+  const onDocFileChosen = (e) => {
+    const file    = e.target.files?.[0];
+    const docName = pendingDoc.current;
+    if (file && docName) {
+      const sizeKB = Math.round(file.size / 1024);
+      const sizeText = sizeKB > 1024 ? `${(sizeKB/1024).toFixed(1)} MB` : `${sizeKB} KB`;
+      setDocUploads(prev => ({ ...prev, [docName]: { name: file.name, size: sizeText } }));
     }
-    docInputRefs.current[docName].click();
+    e.target.value = "";   // allow choosing the same file again
   };
 
   const removeDoc = (docName) => {
@@ -764,15 +896,19 @@ export default function FormSession({
     setPdfError("");
     setPdfGenerating(true);
 
-    // Build a checklist that works whether Engine 5 ran or not
-    const checklist = docRecommendations ?? {
+    // Build a checklist that works whether Engine 5 ran or not, marking which documents are attached
+    const base = docRecommendations ?? {
       required_documents: getFallbackDocDefs(selectedForm),
       summary: "Please bring the listed documents when submitting.",
       estimated_processing_time: "7–10 working days",
       tips: getFallbackTips(selectedForm),
     };
+    const checklist = {
+      ...base,
+      required_documents: (base.required_documents ?? []).map(d => ({ ...d, attached_file: docUploads[d.name]?.name })),
+    };
 
-    // Try backend PDF (reportlab — professional quality)
+    // Try backend PDF (pdfkit — professional quality)
     if (backendOnline) {
       try {
         await apiDownloadPDF(formFields, fieldValues, checklist, selectedForm);
@@ -786,7 +922,7 @@ export default function FormSession({
     // Fallback: jsPDF in-browser
     try {
       await localGeneratePDF(formFields, fieldValues, docUploads, selectedForm);
-    } catch (err) {
+    } catch {
       setPdfError("Could not generate PDF. Please check your connection and try again.");
     } finally {
       setPdfGenerating(false);
@@ -814,9 +950,10 @@ export default function FormSession({
           </button>
           <div className="nav-links hide-mobile">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
-            <button style={flatBtn} className="nav-link">How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoApplication?.()}>Start Application</button>
             <button className="btn-primary" style={{ height: 36, padding: "0 12px" }} onClick={() => onGoApplication?.()}>Get Started</button>
+            <NavAuth />
           </div>
           <button className="nav-mobile-btn hide-desktop" onClick={() => setMobileOpen(o => !o)}>
             <MenuIcon size={24} />
@@ -825,9 +962,10 @@ export default function FormSession({
         {mobileOpen && (
           <div className="nav-mobile-menu hide-desktop">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
-            <button style={flatBtn} className="nav-link">How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoApplication?.()}>Start Application</button>
             <button className="btn-primary" style={{ height: 40, padding: "0 16px" }} onClick={() => onGoApplication?.()}>Get Started</button>
+            <NavAuth />
           </div>
         )}
       </nav>
@@ -848,7 +986,7 @@ export default function FormSession({
             <div className="progress-header">
               <div className="progress-label-row">
                 <span className="progress-label">
-                  {loadingFields ? "Loading form…" : `Form Progress — ${selectedForm}`}
+                  {loadingFields ? "Loading form…" : `Form Progress — ${uploadedFile?.name ?? selectedForm}`}
                 </span>
                 <span className="progress-pct">{progress}%</span>
               </div>
@@ -901,20 +1039,21 @@ export default function FormSession({
                 <input
                   className="chat-input"
                   placeholder={
-                    loadingFields    ? "Loading form fields…" :
-                    allDone          ? "All fields done — check review below." :
-                    isTyping         ? "AI is processing…" :
-                                       "Type your answer naturally…"
+                    loadingFields           ? "Loading form fields…" :
+                    formFields.length === 0 ? "No form loaded" :
+                    interviewDone           ? "All done — check the review below, or use Edit to change an answer." :
+                    busy                    ? "AI is processing…" :
+                                              "Type your answer — or 'skip' / 'help'"
                   }
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  disabled={isTyping || allDone || loadingFields}
+                  disabled={busy || interviewDone || loadingFields || formFields.length === 0}
                 />
                 <button
                   className="chat-send-btn"
                   onClick={handleSend}
-                  disabled={!input.trim() || isTyping || allDone || loadingFields}
+                  disabled={!input.trim() || busy || interviewDone || loadingFields || formFields.length === 0}
                 >
                   <SendIcon size={16} />
                 </button>
@@ -947,30 +1086,34 @@ export default function FormSession({
             </div>
             <div className="preview-scroll">
               <div className="preview-form-badge">
-                <p className="preview-form-name">{selectedForm}</p>
+                <p className="preview-form-name">{uploadedFile?.name ?? selectedForm}</p>
                 <p className="preview-form-sub">
-                  {backendOnline ? "AI-extracted fields" : "Static fields"} · {totalFields} total
+                  {aiFields ? "AI-extracted fields" : "Standard fields"} · {totalFields} total
                 </p>
               </div>
 
               {loadingFields ? (
                 <div style={{ padding: "2rem", textAlign: "center", color: "var(--muted-fg)", fontSize: "0.875rem" }}>
-                  <div className="pdf-spinner" style={{ margin: "0 auto 8px", borderTopColor: "var(--primary)", border: "2px solid var(--border)", borderTopColor: "var(--primary)" }} />
+                  <div className="pdf-spinner" style={{ margin: "0 auto 8px", border: "2px solid var(--border)", borderTopColor: "var(--primary)" }} />
                   Analysing form with AI…
                 </div>
               ) : (
-                formFields.map((field) => {
+                formFields.map((field, idx) => {
                   const val = fieldValues[field.field];
+                  const filled = isFilled(val);
                   const hasError = validationErrors.some(e => e.field === field.field);
+                  const isCurrent = !interviewDone && idx === currentFieldIdx;
                   return (
-                    <div key={field.field} className={`field-row${val ? " filled" : ""}${hasError ? " field-error" : ""}`}>
+                    <div key={field.field} className={`field-row${filled ? " filled" : ""}${hasError ? " field-error" : ""}${isCurrent ? " field-current" : ""}`}>
                       <div className="field-row-top">
                         <label className="field-label">{field.label || field.field}</label>
-                        {val && !hasError && <CheckCircleIcon size={14} style={{ color: "var(--success)" }} />}
-                        {hasError          && <TriangleAlert  size={14} style={{ color: "hsl(0,84%,60%)" }} />}
-                        {!val && !hasError && <CircleAlert    size={14} style={{ color: "rgba(107,114,128,0.4)" }} />}
+                        {filled && !hasError  && <CheckCircleIcon size={14} style={{ color: "var(--success)" }} />}
+                        {hasError             && <TriangleAlert  size={14} style={{ color: "hsl(0,84%,60%)" }} />}
+                        {!filled && !hasError && <CircleAlert    size={14} style={{ color: "rgba(107,114,128,0.4)" }} />}
                       </div>
-                      {val ? <p className="field-value">{val}</p> : <p className="field-empty">Awaiting response…</p>}
+                      {filled
+                        ? <p className="field-value">{formatValue(val)}</p>
+                        : <p className="field-empty">{isCurrent ? "Answering now…" : interviewDone ? "Not provided" : "Awaiting response…"}</p>}
                       {hasError && (
                         <p className="field-error-msg">{validationErrors.find(e => e.field === field.field)?.reason}</p>
                       )}
@@ -1002,6 +1145,7 @@ export default function FormSession({
               </p>
             )}
 
+            <input ref={docInputRef} type="file" accept="application/pdf,image/*" hidden onChange={onDocFileChosen} />
             <div className="doc-list">
               {docNames.map((docName) => {
                 const uploaded    = docUploads[docName];
@@ -1087,24 +1231,37 @@ export default function FormSession({
 
             {/* Field review list */}
             <div className="review-list">
-              {formFields.map((field) => {
+              {formFields.map((field, idx) => {
                 const val      = fieldValues[field.field];
                 const hasError = validationErrors.some(e => e.field === field.field);
+                const missing  = !isFilled(val);
                 return (
                   <div key={field.field} className="review-row">
-                    <span className="review-row-key">{field.label || field.field}</span>
-                    {val ? (
-                      <div className={hasError ? "review-row-val-missing" : "review-row-val-ok"}>
-                        <span style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {String(val)}
-                        </span>
-                        {hasError ? <TriangleAlert size={14} /> : <CheckCircleIcon size={14} />}
-                      </div>
-                    ) : (
-                      <div className="review-row-val-missing">
-                        <span>Missing</span><TriangleAlert size={14} />
-                      </div>
-                    )}
+                    <span className="review-row-key">
+                      {field.label || field.field}
+                      {field.required && <span className="review-required" title="Required">*</span>}
+                    </span>
+                    <div className="review-row-right">
+                      {!missing ? (
+                        <div className={hasError ? "review-row-val-missing" : "review-row-val-ok"}>
+                          <span style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {formatValue(val)}
+                          </span>
+                          {hasError ? <TriangleAlert size={14} /> : <CheckCircleIcon size={14} />}
+                        </div>
+                      ) : (
+                        <div className={field.required || hasError ? "review-row-val-missing" : "review-row-val-optional"}>
+                          <span>{field.required ? "Missing" : "Skipped"}</span>
+                          {(field.required || hasError) && <TriangleAlert size={14} />}
+                        </div>
+                      )}
+                      {interviewDone && (
+                        <button className="review-edit-btn" disabled={busy} onClick={() => startEdit(idx)}
+                          aria-label={`Edit ${field.label || field.field}`}>
+                          Edit
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -1119,9 +1276,11 @@ export default function FormSession({
               </div>
             )}
 
-            {!allDone && (
+            {!interviewDone && totalFields > 0 && (
               <div className="warning-box">
-                <p>⚠ {totalFields - filledCount} field(s) still needed. Complete the chat above first.</p>
+                <p>⚠ {editingIdx !== null
+                  ? "Finish updating the field in the chat above."
+                  : `${totalFields - filledCount} field(s) still to go. Complete the chat above to unlock the review.`}</p>
               </div>
             )}
 
@@ -1130,8 +1289,8 @@ export default function FormSession({
             <div className="review-actions">
               <button
                 className="btn-primary"
-                style={{ height: 40, padding: "0 1.25rem", opacity: (!allDone || pdfGenerating) ? 0.6 : 1 }}
-                disabled={!allDone || pdfGenerating}
+                style={{ height: 40, padding: "0 1.25rem", opacity: (!interviewDone || busy || pdfGenerating) ? 0.6 : 1 }}
+                disabled={!interviewDone || busy || pdfGenerating}
                 onClick={handleDownloadPDF}
               >
                 {pdfGenerating
@@ -1141,10 +1300,10 @@ export default function FormSession({
               </button>
             </div>
 
-            {allDone && (
+            {interviewDone && (
               <p style={{ fontSize: "0.75rem", color: "var(--muted-fg)", marginTop: -4 }}>
-                📎 {filledCount} fields · {Object.keys(docUploads).length} doc(s) attached
-                {backendOnline ? " · AI-validated" : " · locally validated"}
+                📎 {filledCount}/{totalFields} fields · {Object.keys(docUploads).length} doc(s) attached
+                {validation ? (backendOnline ? " · AI-validated" : " · locally validated") : " · validating…"}
               </p>
             )}
           </div>

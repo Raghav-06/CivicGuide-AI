@@ -1,3 +1,4 @@
+import NavAuth from "../components/NavAuth";
 import { useState } from "react";
 /* ── Icons ── */
 const Shield = ({ size = 24 }) => (
@@ -175,6 +176,7 @@ export default function CiviGuideAI({ onGoApplication }) {
             <button className="btn-primary" style={{ height: 36, padding: "0 12px" }} onClick={goApp}>
               Get Started
             </button>
+            <NavAuth />
           </div>
 
           {/* Mobile hamburger */}
@@ -191,6 +193,7 @@ export default function CiviGuideAI({ onGoApplication }) {
             <button className="btn-primary" style={{ height: 40, padding: "0 16px" }} onClick={goApp}>
               Get Started
             </button>
+            <NavAuth />
           </div>
         )}
       </nav>

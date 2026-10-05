@@ -26,12 +26,15 @@ Application.jsx (Selection/Upload): The gateway where users define their intent 
 FormSession.jsx (The Core Engine): The operational hub that manages the chat state, communicates with the API (or local logic), handles field validation, manages document uploads, and triggers final PDF generation.
 
 ⚙️ The API & Fallback Layer
-The frontend expects a FastAPI backend running at http://localhost:8000.
+The frontend expects the Express backend (backend/server.js) running at http://localhost:8000. Override this with a VITE_API_BASE entry in frontend/.env.
 Upon loading a session, FormSession.jsx immediately pings /health.
 
 🟢 Online Mode: The app routes inputs to backend engines (/api/analyze-pdf, /api/process-answer, /api/validate, /api/generate-pdf).
 
 🟠 Offline Mode: The app intercepts requests and uses local JS functions (localProcessAnswer, localValidate, localScore, localGeneratePDF) and static definitions (FALLBACK_FIELDS, FALLBACK_DOCS) to ensure uninterrupted user experience.
+
+🔐 Accounts
+Users can create an account with email + password (activated through a verification link sent by email) or continue with Google. The "Sign in" button in the nav opens the auth dialog (src/auth/AuthModal.jsx); the session lives in an httpOnly cookie set by the backend, and src/auth/AuthProvider.jsx exposes it through useAuth(). The emailed link opens /verify-email (src/pages/VerifyEmail.jsx). The Google button appears automatically when the backend has GOOGLE_CLIENT_ID set.
 
 🚀 Getting Started
 Prerequisites
@@ -56,7 +59,7 @@ Start the development server:
 Bash
 npm run dev
 Connect the Backend (Optional but recommended):
-For the full AI experience, ensure your Python backend (e.g., server.py) is running on localhost:8000. If it isn't, look for the "Offline Mode" badge in the UI.
+For the full AI experience, start the Node backend (cd backend && npm start) so it runs on localhost:8000. If it isn't, look for the "Offline Mode" badge in the UI.
 
 🎨 Styling
-The application relies on custom CSS (implied index.css or similar) using CSS variables for theming. It utilizes utility classes for flexbox layouts, glassmorphism panels (.glass-panel), and modern shadow elevations (.shadow-card). All icons are implemented as inline, zero-dependency SVG React components for maximum performance.
+The application relies on custom CSS (src/styles.css, imported in main.jsx) using CSS variables for theming. It utilizes utility classes for flexbox layouts, glassmorphism panels (.glass-panel), and modern shadow elevations (.shadow-card). All icons are implemented as inline, zero-dependency SVG React components for maximum performance.

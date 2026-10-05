@@ -1,7 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
+
+const backend = process.env.BACKEND_URL ?? 'http://localhost:8000'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
+  server: {
+    // Forward API calls to the Express backend so the app and API share one origin
+    // (no CORS, and the session cookie is first-party).
+    proxy: {
+      '/api': backend,
+      '/health': backend,
+    },
+  },
 })
