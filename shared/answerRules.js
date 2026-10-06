@@ -165,8 +165,8 @@ export function checkAnswer(field, value) {
     }
 
     case "boolean": {
-      if (value === true || /^(y|yes|true|haan|ha)$/i.test(str)) return ok("Yes");
-      if (value === false || /^(n|no|false|nahi|nope)$/i.test(str)) return ok("No");
+      if (value === true || /^(y|yes|true|haan|ha)\b/i.test(str)) return ok("Yes");
+      if (value === false || /^(n|no|false|nahi|nope|never)\b/i.test(str)) return ok("No");
       return bad(str, `Please answer Yes or No for ${label}.`);
     }
 

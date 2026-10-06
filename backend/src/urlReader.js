@@ -31,7 +31,7 @@ for (const [addr, prefix] of [
   ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
 ]) BLOCKED.addSubnet(addr, prefix, "ipv4");
 for (const [addr, prefix] of [
-  ["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8], ["2001:db8::", 32], ["64:ff9b::", 96],
+  ["::", 128], ["::", 96], ["2002::", 16], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8], ["2001:db8::", 32], ["64:ff9b::", 96],
 ]) BLOCKED.addSubnet(addr, prefix, "ipv6");
 
 /** True for loopback, private, link-local, multicast and other non-public addresses. */
