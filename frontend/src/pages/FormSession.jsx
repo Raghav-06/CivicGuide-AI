@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { API_BASE, ApiError, apiRequest, getBackendStatus } from "../api/client";
 import { useAuth } from "../auth/authContext";
 import NavAuth from "../components/NavAuth";
+import { checkAnswer } from "../../../shared/answerRules.js";
 /* ══════════════════════════════════════════════════════════════════════
    API LAYER
    All calls go to the Express backend (backend/server.js).
@@ -31,6 +32,11 @@ async function apiAnalyzePDF(file) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.detail ?? `Form analysis failed (${res.status})`, res.status, data.code);
   return data;
+}
+
+/* ── Engine 1+2: Analyze an online form (or its notice) from a URL ── */
+async function apiAnalyzeUrl(url) {
+  return apiFetch("/api/analyze-url", { url });
 }
 
 /* ── Assistant: answer a question about the current field / form ── */
@@ -64,7 +70,7 @@ async function apiScore(formFields, filledAnswers, validationResult) {
 }
 
 /* ── PDF download via backend (pdfkit) ── */
-async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, formName) {
+async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, formName, sourceUrl) {
   const res = await fetch(`${API_BASE}/api/generate-pdf`, {
     method: "POST",
     credentials: "include",
@@ -74,6 +80,7 @@ async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, form
       filled_answers: filledAnswers,
       document_checklist: documentChecklist,
       form_name: formName,
+      source_url: sourceUrl ?? undefined,
     }),
   });
   if (!res.ok) throw new Error(`PDF generation failed: ${res.status}`);
@@ -200,32 +207,9 @@ function localValidate(formFields, fieldValues) {
     }
     if (empty) return;
 
-    const v = String(val).trim();
-
-    // Date format
-    if (field.type === "date" && !/^\d{2}\/\d{2}\/\d{4}$/.test(v)) {
-      warnings.push({ field: field.field, reason: `"${field.label}" should be in DD/MM/YYYY format.`, severity: "warning" });
-    }
-
-    // Phone format
-    if (field.type === "phone" && !/^[6-9]\d{9}$/.test(v.replace(/\s/g, ""))) {
-      warnings.push({ field: field.field, reason: `"${field.label}" should be a valid 10-digit Indian mobile number.`, severity: "warning" });
-    }
-
-    // Email format
-    if (field.type === "email" && !/^[^@]+@[^@]+\.[^@]+$/.test(v)) {
-      warnings.push({ field: field.field, reason: `"${field.label}" doesn't look like a valid email.`, severity: "warning" });
-    }
-
-    // Aadhaar
-    if (field.field === "aadhaar" && v.replace(/\s/g, "").length !== 12) {
-      warnings.push({ field: field.field, reason: "Aadhaar number should be 12 digits.", severity: "warning" });
-    }
-
-    // Number
-    if (field.type === "number" && isNaN(Number(v.replace(/,/g, "")))) {
-      errors.push({ field: field.field, reason: `"${field.label}" must be a number.`, severity: "error" });
-    }
+    // The same rules each answer is checked against during the conversation.
+    const { error } = checkAnswer(field, val);
+    if (error) errors.push({ field: field.field, reason: error, severity: "error" });
   });
 
   // Cross-field: monthly × 12 vs annual income for Income Certificate
@@ -475,6 +459,7 @@ function localFieldHelp(field) {
     email:   "Enter an email address, e.g. name@example.com.",
     number:  "Enter a number only, e.g. 25000.",
     boolean: "Answer Yes or No.",
+    url:     "Enter a web address, e.g. https://example.gov.in.",
   };
   if (formats[field.type]) parts.push(formats[field.type]);
   if (field.options?.length) parts.push(`Valid options: ${field.options.join(", ")}.`);
@@ -508,7 +493,7 @@ function loadJsPDF() {
   return jsPDFPromise;
 }
 
-async function localGeneratePDF(formFields, fieldValues, docUploads, selectedForm) {
+async function localGeneratePDF(formFields, fieldValues, docUploads, selectedForm, sourceUrl) {
   const JsPDF = await loadJsPDF();
   const doc   = new JsPDF({ unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
@@ -527,6 +512,13 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
   const now = new Date().toLocaleString("en-IN", { dateStyle: "long", timeStyle: "short" });
   doc.text(`Generated: ${now}`, pageW - margin, 21, { align: "right" });
   y = 38;
+
+  if (sourceUrl) {
+    doc.setTextColor(37, 99, 235);
+    doc.setFontSize(9);
+    doc.textWithLink(pdfSafe(`Submit online at: ${sourceUrl}`).slice(0, 110), margin, y, { url: sourceUrl });
+    y += 8;
+  }
 
   doc.setTextColor(30, 30, 30);
   doc.setFontSize(12);
@@ -593,10 +585,17 @@ const XIcon           = ({ size=14 }) => <svg xmlns="http://www.w3.org/2000/svg"
 const WifiOffIcon     = ({ size=14 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="2" x2="22" y1="2" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><circle cx="12" cy="20" r="1"/></svg>;
 const SparkleIcon     = ({ size=14 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>;
 
+/* Turn http(s) links in plain text into clickable links that open in a new tab. */
+function Linkify({ text }) {
+  return text.split(/(https?:\/\/[^\s<>"]+[^\s<>".,;:!?)'])/g).map((p, i) =>
+    i % 2 === 1 ? <a key={i} href={p} target="_blank" rel="noopener noreferrer">{p}</a> : p
+  );
+}
+
 /* Render inline bold **text** */
 function Bold({ text }) {
   return text.split(/\*\*(.*?)\*\*/g).map((p, i) =>
-    i % 2 === 1 ? <strong key={i}>{p}</strong> : p
+    i % 2 === 1 ? <strong key={i}>{p}</strong> : <Linkify key={i} text={p} />
   );
 }
 
@@ -635,6 +634,7 @@ export default function FormSession({
   const [interviewDone,     setInterviewDone]     = useState(false); // every field answered or skipped
   const [editingIdx,        setEditingIdx]        = useState(null);  // re-answering one field after the interview
   const [aiFields,          setAiFields]          = useState(false); // fields came from Engine 1+2 (not static fallback)
+  const [sourceUrl,         setSourceUrl]         = useState(null);  // online form: where the details get submitted
 
   /* ── Bottom panel state (Engine 4–6) ── */
   const [docUploads,        setDocUploads]        = useState({});
@@ -684,6 +684,7 @@ export default function FormSession({
       setInterviewDone(false);
       setEditingIdx(null);
       setAiFields(false);
+      setSourceUrl(uploadedFile?.url ?? null);
       setDocUploads({});
       setValidation(null);
       setScoreData(null);
@@ -705,25 +706,32 @@ export default function FormSession({
       let fromAI = false;
       let loadError = null;
       let analysisNotice = null;
+      let pageTitle = null;
 
       if (ai) {
         try {
-          setMessages([{ role: "system", text: `📄 Analysing ${formNameLabel} with AI…` }]);
+          setMessages([{ role: "system", text: uploadedFile?.url
+            ? `🌐 Reading the online form at ${uploadedFile.url} …`
+            : `📄 Analysing ${formNameLabel} with AI…` }]);
           const result = uploadedFile?.file
             ? await apiAnalyzePDF(uploadedFile.file)   // user's own PDF / DOCX
-            : await apiAnalyzePreset(selectedForm);    // preset card
+            : uploadedFile?.url
+              ? await apiAnalyzeUrl(uploadedFile.url)  // online form / notice at a link
+              : await apiAnalyzePreset(selectedForm);  // preset card
           if (cancelled) return;
           fields = result.form_fields ?? [];
           fromAI = fields.length > 0;
           analysisNotice = result.notice ?? null;
+          if (result.source_url) setSourceUrl(result.source_url);
+          if (uploadedFile?.url) pageTitle = result.form_name || null;
         } catch (err) {
           console.warn("AI field load failed:", err);
           loadError = err.message;
         }
       }
 
-      // Preset forms have built-in fields to fall back on; an uploaded form has nothing to fall back to.
-      if (!fromAI && !uploadedFile?.file) fields = getFallbackFields(selectedForm);
+      // Preset forms have built-in fields to fall back on; an uploaded or linked form has nothing to fall back to.
+      if (!fromAI && !uploadedFile) fields = getFallbackFields(selectedForm);
 
       if (cancelled) return;
       setFormFields(fields);
@@ -736,7 +744,7 @@ export default function FormSession({
           {
             role: "ai",
             text: ai
-              ? `I couldn't analyse **${formNameLabel}**.\n\n${loadError ?? "No fillable fields were found."}\n\nYou can try another file, or choose one of the ready-made forms from **Start Application**.`
+              ? `I couldn't analyse **${formNameLabel}**.\n\n${loadError ?? "No fillable fields were found."}\n\nYou can try another ${uploadedFile?.url ? "link or upload the form as a PDF" : "file"}, or choose one of the ready-made forms from **Start Application**.`
               : online
                 ? `Analysing your own form needs AI, which ${needsLogin ? "requires you to sign in on this server" : "isn't configured on this server"}.\n\nChoose one of the ready-made forms from **Start Application** — those work with built-in rules.`
                 : `Analysing your own form needs the AI backend, which isn't reachable right now.\n\nStart the backend server and try again, or choose one of the ready-made forms from **Start Application** — those work offline.`,
@@ -747,7 +755,10 @@ export default function FormSession({
 
       const howTo = "Answer in your own words. Type **skip** to skip a question, or **help** if you're not sure what to enter.";
       const intro = fromAI
-        ? `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language.` +
+        ? (uploadedFile?.url
+            ? `I've read the online form${pageTitle ? ` **${pageTitle}**` : ""} at ${uploadedFile.url} and found **${fields.length} details** it asks for. ` +
+              "I'll collect and check each one, so you can copy them into the website when you submit."
+            : `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language.`) +
           (analysisNotice ? `\n\n⚠ ${analysisNotice}` : "") + `\n\n${howTo}`
         : ai
           ? `AI analysis isn't available right now, so I've loaded the standard **${formNameLabel}** fields instead (${fields.length} fields).\n\n${howTo}`
@@ -855,7 +866,13 @@ export default function FormSession({
     result ??= localProcessAnswer(field, trimmed, fieldValues, formFields);
 
     const primaryField  = result.primary_field ?? { [field.field]: trimmed };
-    const derivedFields = result.derived_fields ?? {};
+    // Derived values are only kept when they pass their own field's rules.
+    const derivedFields = Object.fromEntries(Object.entries(result.derived_fields ?? {}).flatMap(([k, v]) => {
+      const target = formFields.find(f => f.field === k);
+      if (!target) return [[k, v]];
+      const checked = checkAnswer(target, v);
+      return checked.error ? [] : [[k, checked.value]];
+    }));
     let clarification   = result.clarification_needed ? (result.clarification_question || `Could you tell me your ${label} again?`) : null;
     let uncertainty     = result.uncertainty_detected ?? false;
     let value           = field.field in primaryField ? primaryField[field.field] : Object.values(primaryField)[0];
@@ -866,6 +883,15 @@ export default function FormSession({
     if (!isFilled(value) || String(value).trim().toLowerCase() === "null") {
       value = null;
       clarification ??= `Sorry, I couldn't work out your ${label} from that. Could you say it another way?`;
+    } else {
+      // An answer that breaks the field's rules (bad Aadhaar, 9-digit mobile, future birth date, …)
+      // is never saved: say what's wrong and ask again, however many tries it takes.
+      const checked = checkAnswer(field, value);
+      if (checked.error) {
+        addMessage("ai", `❌ ${checked.error}\n\nPlease enter your **${label}** again, or type **skip** to leave it for now.`);
+        return;
+      }
+      value = checked.value;
     }
 
     // Clarification needed — stay on this field, at most MAX_CLARIFICATIONS times.
@@ -981,6 +1007,11 @@ export default function FormSession({
         addMessage("ai", `📁 **Documents needed:** ${docs.summary}\n\nMark each one ready in the documents panel below.`);
       }
 
+      if (sourceUrl) {
+        addMessage("ai", `🌐 **Submitting online:** open ${sourceUrl} and copy each answer from the review panel into the matching box. ` +
+          "Download the PDF to keep all your details (and the link) in one place.");
+      }
+
     } catch (err) {
       console.warn("Post-fill pipeline error:", err);
       // If the online pipeline fails, fall back to local validation
@@ -1039,7 +1070,7 @@ export default function FormSession({
     // Try backend PDF (pdfkit — professional quality)
     if (backendOnline) {
       try {
-        await apiDownloadPDF(formFields, fieldValues, checklist, selectedForm);
+        await apiDownloadPDF(formFields, fieldValues, checklist, selectedForm, sourceUrl);
         setPdfGenerating(false);
         return;
       } catch (err) {
@@ -1053,7 +1084,7 @@ export default function FormSession({
       if (hasUnsupportedChars(texts)) {
         setPdfError("Some of your answers use characters (such as ₹ or Hindi text) that the offline PDF can't display, so they may look wrong. Start the backend server for a PDF that renders them correctly.");
       }
-      await localGeneratePDF(formFields, fieldValues, docUploads, selectedForm);
+      await localGeneratePDF(formFields, fieldValues, docUploads, selectedForm, sourceUrl);
     } catch {
       setPdfError("Could not generate PDF. Please check your connection and try again.");
     } finally {

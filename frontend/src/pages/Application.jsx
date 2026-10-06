@@ -80,6 +80,8 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
   const [uploadedFile,       setUploadedFile]       = useState(null);  // { name, label, size }
   const [dragOver,           setDragOver]           = useState(false);
   const [uploadError,        setUploadError]        = useState("");
+  const [formLink,           setFormLink]           = useState("");    // URL of an online form / notice
+  const [linkError,          setLinkError]          = useState("");
 
   const [backend,            setBackend]            = useState(null);  // null = checking; else getBackendStatus()
   const { user } = useAuth();
@@ -154,6 +156,26 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
   /* Start with uploaded form */
   const startWithUpload = () => {
     if (uploadedFile && onSelectForm) onSelectForm(uploadedFile.label, uploadedFile);
+  };
+
+  /* Start with an online form (e.g. an exam registration page) — the server reads the link. */
+  const startWithLink = (e) => {
+    e.preventDefault();
+    setLinkError("");
+    if (uploadBlocked) return;
+    const text = formLink.trim();
+    let url;
+    try {
+      url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
+    } catch {
+      url = null;
+    }
+    if (!url || !/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) {
+      setLinkError("Enter the full web address of the form, e.g. https://example.gov.in/apply.");
+      return;
+    }
+    const label = url.hostname.replace(/^www\./, "");
+    onSelectForm?.(label, { name: label, label, url: url.href });
   };
 
   return (
@@ -275,6 +297,32 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
                   {uploadError && (
                     <p className="upload-error">{uploadError}</p>
                   )}
+
+                  {/* ── Online form by link ── */}
+                  <div className="divider-or">
+                    <div className="divider-line" />
+                    <span className="divider-text">or paste a link to an online form</span>
+                    <div className="divider-line" />
+                  </div>
+                  <form className="link-form" onSubmit={startWithLink}>
+                    <input
+                      className="link-input"
+                      type="text"
+                      inputMode="url"
+                      placeholder="https://… exam registration or application page"
+                      value={formLink}
+                      onChange={(e) => { setFormLink(e.target.value); setLinkError(""); }}
+                      disabled={Boolean(uploadBlocked)}
+                      aria-label="Link to an online form"
+                    />
+                    <button type="submit" className="btn-primary link-submit" disabled={Boolean(uploadBlocked) || !formLink.trim()}>
+                      Read Form <ArrowRight size={16} />
+                    </button>
+                  </form>
+                  <p className="drop-zone-sub link-hint">
+                    The form page itself, or its official notice (web page or PDF). We&apos;ll list the details it asks for and check your answers.
+                  </p>
+                  {linkError && <p className="upload-error">{linkError}</p>}
                 </>
               ) : (
                 /* ── Uploaded file pill ── */

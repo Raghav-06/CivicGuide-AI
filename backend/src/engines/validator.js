@@ -1,5 +1,5 @@
 import { askAI, parseJSON, isEmpty, quoteData } from "./ai.js";
-import { canonicalOption, parseDate } from "./fields.js";
+import { checkAnswer } from "../../../shared/answerRules.js";
 
 // AI findings that aren't about one field (e.g. "the form as a whole") are kept under these names.
 const GENERAL_FIELDS = new Set(["", "general", "form", "overall", "all", "multiple", "none"]);
@@ -19,34 +19,11 @@ export function validateFormat(field, value) {
     return errors;
   }
 
-  const str = String(value);
-
-  if (field.type === "email" && !/[^@]+@[^@]+\.[^@]+/.test(str)) {
-    errors.push({ field: field.field, type: "invalid_format",
-                  severity: "error", reason: "Not a valid email address." });
-  }
-
-  if (field.type === "phone" && !/^\+?[\d\s-]{7,15}$/.test(str)) {
-    errors.push({ field: field.field, type: "invalid_format",
-                  severity: "error", reason: "Not a valid phone number." });
-  }
-
-  if (field.type === "number" && (str.trim() === "" || Number.isNaN(Number(str)))) {
-    errors.push({ field: field.field, type: "invalid_type",
-                  severity: "error", reason: "Must be a number." });
-  }
-
-  if (field.type === "date" && !/^\d{1,2}\/\d{1,2}\/\d{4}$|^\d{4}-\d{1,2}-\d{1,2}$/.test(str.trim())) {
-    errors.push({ field: field.field, type: "invalid_format",
-                  severity: "error", reason: "Use the DD/MM/YYYY format, e.g. 15/08/1990." });
-  } else if (field.type === "date" && !parseDate(str)) {
-    errors.push({ field: field.field, type: "invalid_format",
-                  severity: "error", reason: "This date doesn't exist — check the day and month." });
-  }
-
-  if (field.type === "select" && field.options?.length && !field.options.includes(canonicalOption(field, str))) {
-    errors.push({ field: field.field, type: "invalid_option", severity: "error",
-                  reason: `'${value}' is not valid. Options: ${field.options.join(", ")}` });
+  // The same rules the conversation applies to each answer (shared/answerRules.js).
+  const { error } = checkAnswer(field, value);
+  if (error) {
+    errors.push({ field: field.field, type: field.type === "select" ? "invalid_option" : "invalid_format",
+                  severity: "error", reason: error });
   }
   return errors;
 }

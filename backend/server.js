@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { analyzeFormDetailed, processAnswer, validateForm, getDocuments, scoreSubmission } from "./src/core.js";
 import { readFormBuffer, detectFormType } from "./src/formReader.js";
+import { readFormFromUrl, MAX_URL_LENGTH } from "./src/urlReader.js";
 import { generateFilledPDF } from "./src/formOutput.js";
 import { PRESET_FORM_TEXTS } from "./src/presets.js";
 import { isEmpty, aiStatus } from "./src/engines/ai.js";
@@ -131,9 +132,9 @@ app.get("/health", (req, res) => {
 });
 
 /** Run Engines 1+2, turning failures into errors the user can act on. */
-async function analyzeOrExplain(formText) {
+async function analyzeOrExplain(formText, options) {
   try {
-    return await analyzeFormDetailed(formText);
+    return await analyzeFormDetailed(formText, options);
   } catch (err) {
     if (err.message.startsWith("No form fields")) throw new HttpError(422, err.message);
     console.error("Form analysis failed:", err);
@@ -183,6 +184,31 @@ app.post("/api/analyze-pdf", uploadLimiter, aiGuard, upload.single("file"), rout
 
   const { fields, notice } = await analyzeOrExplain(formText);
   res.json({ form_fields: fields, form_name: file.originalname, notice });
+}));
+
+// ── Engine 1+2: Analyze an online form (or its notice) from a URL ────
+app.post("/api/analyze-url", uploadLimiter, aiGuard, route(async (req, res) => {
+  const rawUrl = readText(req.body, "url", { max: MAX_URL_LENGTH, label: "a link to the online form" });
+
+  let page;
+  try {
+    page = await readFormFromUrl(rawUrl, { maxBytes: MAX_UPLOAD_MB * 1024 * 1024 });
+  } catch (err) {
+    if (err.code === "PDF_PASSWORD") throw new HttpError(422, "The PDF at this link is password-protected, so it can't be read.");
+    if (err.code === "PDF_CORRUPT" || err.code === "DOCX_CORRUPT") throw new HttpError(422, "The document at this link seems to be damaged.");
+    if (err.code?.startsWith("URL_")) {
+      throw new HttpError(err.code === "URL_INVALID" || err.code === "URL_BLOCKED" ? 400 : 422, err.message, err.code);
+    }
+    console.warn("URL read failed:", err);
+    throw new HttpError(422, `Couldn't read this link: ${err.message}`);
+  }
+  if (page.text.length < 40) {
+    throw new HttpError(422, "No form details were found at this link. The page may build its form with JavaScript or need a login — "
+      + "open it in your browser, save it as a PDF (Ctrl+P → Save as PDF) and upload that, or paste the link to the official notification PDF.");
+  }
+
+  const { fields, notice } = await analyzeOrExplain(page.text, { source: page.kind === "html" ? "web" : "file" });
+  res.json({ form_fields: fields, form_name: page.title.slice(0, 120), source_url: page.url, notice });
 }));
 
 // ── Assistant: free-form questions about forms and documents ─────────
@@ -284,10 +310,13 @@ app.post("/api/generate-pdf", route(async (req, res) => {
   const document_checklist = readObject(req.body, "document_checklist");
   const rawName = req.body?.form_name;
   const formName = (rawName === undefined || rawName === null ? "" : String(rawName)).trim().slice(0, 120) || "Government Form";
+  // Online forms: printed so the applicant knows where to submit. Only http(s) links are accepted.
+  const rawSource = typeof req.body?.source_url === "string" ? req.body.source_url.trim() : "";
+  const sourceUrl = /^https?:\/\/\S+$/i.test(rawSource) && rawSource.length <= MAX_URL_LENGTH ? rawSource : null;
 
   let pdf;
   try {
-    pdf = await generateFilledPDF(form_fields, filled_answers, document_checklist);
+    pdf = await generateFilledPDF(form_fields, filled_answers, document_checklist, { sourceUrl });
   } catch (err) {
     throw new HttpError(500, `PDF generation failed: ${err.message}`);
   }

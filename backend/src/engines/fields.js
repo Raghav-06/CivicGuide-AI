@@ -4,8 +4,11 @@
  * value that reaches the form passes through here.
  */
 import { isEmpty } from "./ai.js";
+import { parseDate } from "../../../shared/answerRules.js";
 
-export const FIELD_TYPES = ["text", "number", "date", "email", "phone", "select", "boolean"];
+export { parseDate };
+
+export const FIELD_TYPES = ["text", "number", "date", "email", "phone", "select", "boolean", "url"];
 
 // Types models commonly return instead of ours.
 const TYPE_ALIASES = {
@@ -14,9 +17,8 @@ const TYPE_ALIASES = {
   datetime: "date", dob: "date",
   dropdown: "select", radio: "select", enum: "select", choice: "select",
   checkbox: "boolean", bool: "boolean", yes_no: "boolean", yesno: "boolean",
+  website: "url", link: "url", uri: "url",
 };
-
-const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /** "Father's Full Name" → "fathers_full_name" */
 export function snakeCase(value) {
@@ -62,6 +64,7 @@ export function normaliseField(raw) {
     description: typeof raw.description === "string" ? raw.description : null,
     type: type === "select" && !options ? "text" : type,
     required: raw.required === true || String(raw.required).toLowerCase() === "true",
+    multiple: type === "select" && options !== null && (raw.multiple === true || String(raw.multiple).toLowerCase() === "true"),
     options,
   };
 }
@@ -92,32 +95,6 @@ export function canonicalOption(field, value) {
   if (!field?.options?.length || isBlank(value)) return value;
   const key = String(value).trim().toLowerCase();
   return field.options.find((o) => String(o).trim().toLowerCase() === key) ?? value;
-}
-
-/** Parse a date in DD/MM/YYYY, D-M-YYYY, DD.MM.YYYY, YYYY-MM-DD or "15 Aug 1990" form. */
-export function parseDate(value) {
-  const s = String(value ?? "").trim();
-  let d, m, y;
-  let match;
-  if ((match = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) {
-    [, y, m, d] = match;
-  } else if ((match = s.match(/^(\d{1,2})[-/.\s](\d{1,2})[-/.\s](\d{4})$/))) {
-    [, d, m, y] = match;
-  } else if ((match = s.match(/^(\d{1,2})(?:st|nd|rd|th)?[\s-]+([a-z]{3,})\.?,?[\s-]+(\d{4})$/i))) {
-    d = match[1];
-    m = MONTHS.indexOf(match[2].slice(0, 3).toLowerCase()) + 1;
-    y = match[3];
-  } else if ((match = s.match(/^([a-z]{3,})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/i))) {
-    m = MONTHS.indexOf(match[1].slice(0, 3).toLowerCase()) + 1;
-    d = match[2];
-    y = match[3];
-  } else {
-    return null;
-  }
-  [d, m, y] = [Number(d), Number(m), Number(y)];
-  const date = new Date(Date.UTC(y, m - 1, d));
-  if (!m || date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
-  return { d, m, y };
 }
 
 /** Format a parseable date as DD/MM/YYYY; returns the input unchanged otherwise. */

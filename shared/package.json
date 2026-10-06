@@ -1,0 +1,6 @@
+{
+  "name": "civiguide-shared",
+  "private": true,
+  "description": "Code used by both the backend and the frontend",
+  "type": "module"
+}

@@ -2018,6 +2018,39 @@ html {
   max-width: 28rem;
 }
 
+/* ── Online form by link (Application) ── */
+.link-form {
+  margin-top: 1rem;
+  width: 100%;
+  max-width: 28rem;
+  display: flex;
+  gap: 8px;
+}
+.link-input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 0 14px;
+  font-size: 0.875rem;
+  color: var(--fg);
+  outline: none;
+  font-family: inherit;
+  transition: box-shadow 0.2s;
+}
+.link-input:focus { box-shadow: 0 0 0 2px rgba(99,102,241,0.3); }
+.link-input::placeholder { color: var(--muted-fg); }
+.link-input:disabled { background: var(--muted); cursor: not-allowed; opacity: 0.6; }
+.link-submit { height: 42px; padding: 0 14px; flex-shrink: 0; }
+.link-hint {
+  margin-top: 6px;
+  max-width: 28rem;
+  text-align: center;
+  line-height: 1.5;
+}
+
 /* ── Uploaded file pill ── */
 .uploaded-pill {
   margin-top: 1rem;

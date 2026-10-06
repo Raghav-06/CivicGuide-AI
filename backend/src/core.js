@@ -5,14 +5,15 @@ import { validateLogic } from "./engines/validator.js";
 import { recommendDocuments } from "./engines/documents.js";
 import { calculateScore } from "./engines/scorer.js";
 import { isBlank, normaliseValue } from "./engines/fields.js";
+import { checkAnswer } from "../../shared/answerRules.js";
 
 /**
  * Step 1+2: Extract fields and simplify all questions.
  * Returns { fields, notice }; `notice` explains when part of a long form wasn't analysed.
  */
-export async function analyzeFormDetailed(formText) {
+export async function analyzeFormDetailed(formText, options) {
   console.log("  → Extracting form fields...");
-  const { fields, notice } = await extractFormSchemaDetailed(formText);
+  const { fields, notice } = await extractFormSchemaDetailed(formText, options);
   console.log(`  → Simplifying ${fields.length} fields...`);
   return { fields: await simplifyAllFields(fields), notice };
 }
@@ -44,12 +45,26 @@ export async function processAnswer(field, userInput, formFields, context) {
   const derived = {};
   const rawDerived = mapping?.derived_fields && typeof mapping.derived_fields === "object" ? mapping.derived_fields : {};
   for (const [key, v] of Object.entries(rawDerived)) {
-    if (key !== field.field && byName.has(key) && !isBlank(v)) derived[key] = normaliseValue(byName.get(key), v);
+    if (key === field.field || !byName.has(key) || isBlank(v)) continue;
+    // A derived value that breaks its field's rules is dropped rather than filled in silently.
+    const checked = checkAnswer(byName.get(key), normaliseValue(byName.get(key), v));
+    if (!checked.error) derived[key] = checked.value;
+  }
+
+  // Check the answer against its field's rules (Aadhaar checksum, PIN, mobile, dates, …).
+  let invalidReason = null;
+  if (!isBlank(value)) {
+    const checked = checkAnswer(schemaField, value);
+    value = checked.value;
+    invalidReason = checked.error;
   }
 
   let clarificationNeeded = extraction?.clarification_needed === true;
   let clarificationQuestion = clarificationNeeded ? extraction?.clarification_question || null : null;
-  if (isBlank(value)) {
+  if (invalidReason) {
+    clarificationNeeded = true;
+    clarificationQuestion = invalidReason;
+  } else if (isBlank(value)) {
     clarificationNeeded = true;
     clarificationQuestion ||= `Sorry, I couldn't work out your ${label} from that. Could you say it another way?`;
   } else if (clarificationNeeded && !clarificationQuestion) {
@@ -63,6 +78,7 @@ export async function processAnswer(field, userInput, formFields, context) {
     uncertainty_detected: extraction?.uncertainty_detected === true,
     clarification_needed: clarificationNeeded,
     clarification_question: clarificationQuestion,
+    invalid_reason: invalidReason,   // set when the answer was understood but breaks the field's rules
   };
 }
 
