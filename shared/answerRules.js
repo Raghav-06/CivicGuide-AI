@@ -12,6 +12,9 @@
  * "Aadhaar Number" typed as plain text still gets the Aadhaar rules.
  */
 
+/** The value types a form field can have (backend schemas, catalogue entries and checkAnswer agree on these). */
+export const FIELD_TYPES = ["text", "number", "date", "email", "phone", "select", "boolean", "url"];
+
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const MAX_AGE_YEARS = 120;
 
@@ -40,7 +43,7 @@ function describe(field) {
 }
 
 // Names of things that aren't a person's name, even though the label says "name".
-const NOT_A_PERSON = /\b(business|employer|company|firm|organi[sz]ation|institut\w*|school|college|university|hospital|bank|branch|office|registrar|village|town|city|district|state|place|street|road|locality|building|exam|course|post|scheme|centre|center|shop|board)\b/;
+const NOT_A_PERSON = /\b(business|employer|company|firm|organi[sz]ation|institut\w*|school|college|university|hospital|bank|branch|office|registrar|village|town|city|district|state|place|street|road|locality|building|exam|course|post|scheme|centre|center|shop|board|enterprise|trade)\b/;
 
 /** What kind of value this field holds, by type first, then by its name/label. */
 export function fieldKind(field) {
@@ -107,8 +110,22 @@ function cleanPhone(value) {
 const ok = (value) => ({ value, error: null });
 const bad = (value, error) => ({ value, error });
 
-/** Check one answer against the rules for its field. See the module comment. */
+/**
+ * Check one answer against the rules for its field. See the module comment.
+ * Fields from the service catalogue may carry `example` / `format`; an error then ends with
+ * the example (or the format) so the user sees what is expected.
+ */
 export function checkAnswer(field, value) {
+  const result = checkRules(field, value);
+  if (!result.error) return result;
+  const hint = typeof field?.example === "string" && field.example.trim()
+    ? `Example: ${field.example.trim()}`
+    : typeof field?.format === "string" && field.format.trim() ? `Expected: ${field.format.trim()}` : null;
+  if (!hint || result.error.includes(hint.replace(/^\w+: /, ""))) return result;
+  return { ...result, error: `${result.error} ${hint.replace(/\.?$/, ".")}` };
+}
+
+function checkRules(field, value) {
   if (value === null || value === undefined || String(value).trim() === "") return ok(value);
   const label = field?.label || String(field?.field ?? "this field").replace(/_/g, " ");
   const str = String(value).trim();

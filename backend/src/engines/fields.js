@@ -4,11 +4,9 @@
  * value that reaches the form passes through here.
  */
 import { isEmpty } from "./ai.js";
-import { parseDate } from "../../../shared/answerRules.js";
+import { parseDate, FIELD_TYPES } from "../../../shared/answerRules.js";
 
-export { parseDate };
-
-export const FIELD_TYPES = ["text", "number", "date", "email", "phone", "select", "boolean", "url"];
+export { parseDate, FIELD_TYPES };
 
 // Types models commonly return instead of ours.
 const TYPE_ALIASES = {

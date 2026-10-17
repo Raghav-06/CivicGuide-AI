@@ -1,0 +1,57 @@
+// Business: Udyam (MSME) registration.
+
+export default [
+  {
+    id: "udyam-registration",
+    name: "Udyam (MSME) Registration",
+    name_hi: "उद्यम (एमएसएमई) पंजीकरण",
+    category: "business",
+    keywords: ["udyam", "msme", "udyog aadhaar", "small business", "micro enterprise", "msme certificate", "udyam certificate", "business registration", "vyapar"],
+    authority: "Ministry of Micro, Small & Medium Enterprises",
+    official_url: "https://udyamregistration.gov.in/",
+    modes: ["online"],
+    state_specific: false,
+    summary: "Free, paperless, Aadhaar-based online registration for micro, small and medium enterprises. It gives a permanent Udyam Registration Number and certificate used for MSME benefits like priority-sector loans and government procurement preferences.",
+    eligibility: [
+      "Any enterprise in manufacturing or services (proprietorship, partnership, LLP, company, etc.)",
+      "Within the MSME limits on investment in plant & machinery and turnover — revised from 1 April 2025 to: Micro up to ₹2.5 crore investment & ₹10 crore turnover; Small up to ₹25 crore & ₹100 crore; Medium up to ₹125 crore & ₹500 crore",
+      "Aadhaar of the proprietor / managing partner / authorised signatory; PAN (and GSTIN where applicable)",
+    ],
+    steps: [
+      { title: "Open the official portal", detail: "Use udyamregistration.gov.in only — it is free; ignore look-alike sites that charge.", mode: "online" },
+      { title: "Aadhaar verification", detail: "Enter the Aadhaar of the proprietor/authorised person and verify with OTP.", mode: "online" },
+      { title: "PAN and GST validation", detail: "PAN details and investment/turnover data are fetched from government databases.", mode: "online" },
+      { title: "Fill the enterprise details", detail: "Name, address, bank, activity (NIC code), employees, units.", mode: "online" },
+      { title: "Submit and download", detail: "Submit with the final OTP; the certificate is e-mailed and downloadable.", mode: "online" },
+    ],
+    fields: [
+      { field: "aadhaar_number", label: "Aadhaar Number of Entrepreneur", type: "text", required: true, format: "12 digits (checked in your browser only)", example: "2345 6789 0124" },
+      { field: "entrepreneur_name", label: "Name of Entrepreneur", type: "text", required: true, format: "As on Aadhaar", example: "Lakshmi Narayan" },
+      { field: "pan", label: "PAN", type: "text", required: true, format: "10 characters", example: "ABCDE1234F" },
+      { field: "enterprise_name", label: "Name of Enterprise", type: "text", required: true, example: "LN Tailoring Works" },
+      { field: "organisation_type", label: "Type of Organisation", type: "select", required: true, options: ["Proprietary", "Partnership", "HUF", "LLP", "Private Limited Company", "Public Limited Company", "Co-operative", "Self Help Group", "Others"], example: "Proprietary" },
+      { field: "major_activity", label: "Major Activity", type: "select", required: true, options: ["Manufacturing", "Services", "Trading"], example: "Services" },
+      { field: "bank_ifsc", label: "Bank IFSC", type: "text", required: true, format: "11 characters", example: "SBIN0001234" },
+      { field: "mobile_number", label: "Mobile Number", type: "phone", required: true, example: "9876543210" },
+      { field: "email", label: "E-mail", type: "email", required: true, example: "lntailoring@example.com" },
+    ],
+    documents: [
+      { name: "Aadhaar (linked to mobile)", mandatory: true, accepted: [], condition: null, specs: "No upload — OTP verification" },
+      { name: "PAN", mandatory: true, accepted: [], condition: null, specs: null },
+      { name: "GSTIN", mandatory: true, accepted: [], condition: "if the business is required to have GST", specs: null },
+      { name: "Bank account details", mandatory: true, accepted: [], condition: null, specs: null },
+    ],
+    conditions: [],
+    fees: "Indicative only — Udyam registration is free on the official portal.",
+    timeline: "Indicative only — usually immediate after submission.",
+    photo_signature_specs: null,
+    rules: [
+      "Registration is free — the official portal charges nothing.",
+      "An enterprise can have only one Udyam registration; add more units to the same registration.",
+      "Classification is updated automatically from ITR/GST data.",
+    ],
+    rejection_reasons: ["Aadhaar OTP not received (mobile not linked)", "PAN not matching Aadhaar name"],
+    tips: ["Choose the correct NIC code — it decides which schemes you can use."],
+    last_reviewed: "2026-10",
+  },
+];

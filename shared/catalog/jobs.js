@@ -1,0 +1,66 @@
+// Government jobs: a generic SSC / UPSC-style recruitment application.
+// Every recruitment publishes its own notice, which always wins over this guide.
+
+export default [
+  {
+    id: "govt-job-application",
+    name: "Government Job Application (SSC / UPSC-style)",
+    name_hi: "सरकारी नौकरी आवेदन (एसएससी / यूपीएससी)",
+    category: "jobs",
+    keywords: ["sarkari naukri", "naukri", "government job", "job", "ssc", "upsc", "cgl", "chsl", "mts", "civil services", "ias", "recruitment", "otr", "one time registration", "vacancy", "bharti"],
+    authority: "Staff Selection Commission / Union Public Service Commission (and other recruiting bodies)",
+    official_url: "https://ssc.gov.in/",
+    modes: ["online"],
+    state_specific: false,
+    summary: "Complete One-Time Registration (OTR) on the recruiter's portal, then apply to each notified exam: fill details, upload photo and signature, pay the fee (if not exempt) and keep the confirmation. Read the notice for eligibility first.",
+    eligibility: [
+      "Indian citizen (and some others, as each notice specifies)",
+      "Educational qualification by the notice's cut-off date",
+      "Within the age limit on the notice's crucial date, after any category relaxation",
+    ],
+    steps: [
+      { title: "Read the notice", detail: "Find it on ssc.gov.in or upsc.gov.in: posts, eligibility, age crucial date, fees, upload specs and deadlines.", mode: "online" },
+      { title: "One-Time Registration", detail: "Register once with your mobile, e-mail and ID details; note the registration number.", mode: "online" },
+      { title: "Apply for the exam", detail: "Log in, choose the exam, fill post preferences, exam centres and qualification details.", mode: "online" },
+      { title: "Upload photo and signature", detail: "Exactly as the notice specifies (some portals capture a live photo with the webcam).", mode: "online" },
+      { title: "Pay the fee", detail: "Online, unless you are exempt. Keep the transaction reference.", mode: "online" },
+      { title: "Download the application", detail: "Save the submitted form; use any correction window to fix mistakes.", mode: "online" },
+    ],
+    fields: [
+      { field: "candidate_name", label: "Name", type: "text", required: true, format: "As in your Class 10 certificate", example: "Vikram Singh" },
+      { field: "fathers_name", label: "Father's Name", type: "text", required: true, example: "Harpal Singh" },
+      { field: "mothers_name", label: "Mother's Name", type: "text", required: true, example: "Gurpreet Kaur" },
+      { field: "date_of_birth", label: "Date of Birth", type: "date", required: true, format: "DD/MM/YYYY, as in Class 10 certificate", example: "21/06/1999",
+        common_mistakes: ["Using the date from another document that differs from Class 10"] },
+      { field: "category", label: "Category", type: "select", required: true, options: ["UR", "EWS", "OBC", "SC", "ST"], example: "OBC" },
+      { field: "highest_qualification", label: "Highest Qualification", type: "text", required: true, example: "B.Com, University of Delhi, 2021" },
+      { field: "mobile_number", label: "Mobile Number", type: "phone", required: true, example: "9876543210" },
+      { field: "email", label: "E-mail", type: "email", required: true, example: "vikram.singh@example.com" },
+      { field: "identification_mark", label: "Visible Identification Mark", type: "text", required: false, example: "Mole on left cheek" },
+    ],
+    documents: [
+      { name: "Photograph (scan or live capture)", mandatory: true, accepted: [], condition: null, specs: "As the notice specifies — usually recent, without cap or glasses" },
+      { name: "Signature (scan)", mandatory: true, accepted: [], condition: null, specs: "As the notice specifies" },
+      { name: "Class 10 certificate", mandatory: true, accepted: [], condition: null, specs: "For name and DOB" },
+      { name: "Qualification certificates / marksheets", mandatory: true, accepted: [], condition: null, specs: "Verified at document verification" },
+      { name: "Category certificate", mandatory: true, accepted: [], condition: "if claiming SC / ST / OBC / EWS", specs: "In the central government format" },
+      { name: "PwBD / ex-servicemen certificate", mandatory: true, accepted: [], condition: "if claiming those benefits", specs: null },
+    ],
+    conditions: [
+      { id: "reserved", question: "Are you claiming SC / ST / OBC / EWS?", adds_documents: ["Category certificate"] },
+      { id: "pwbd_esm", question: "Are you PwBD or an ex-serviceman?", adds_documents: ["PwBD / ex-servicemen certificate"] },
+    ],
+    fees: "Indicative only — commonly ₹100 for SSC and UPSC exams; women, SC, ST, PwBD and eligible ex-servicemen are usually exempt. Verify in the notice.",
+    timeline: "Indicative only — application windows are typically 3–4 weeks; the whole recruitment can take months.",
+    photo_signature_specs: "Follow the notice exactly; SSC has used live webcam photo capture. Wrong photos are a common reason for rejection.",
+    rules: [
+      "Eligibility is checked at document verification — if you are found ineligible later, the candidature is cancelled.",
+      "Usual central age relaxations: OBC 3 years, SC/ST 5 years, PwBD 10 years (more in combination); check the notice.",
+      "Submit only one application per exam.",
+      "Category certificates must be in the central government format for central jobs.",
+    ],
+    rejection_reasons: ["Photo or signature not as specified", "Qualification not complete by the cut-off date", "Over age on the crucial date", "Multiple applications"],
+    tips: ["Apply early; portals slow down near deadlines.", "Keep scans of all certificates ready in one folder."],
+    last_reviewed: "2026-10",
+  },
+];
