@@ -2,6 +2,7 @@ import NavAuth from "../components/NavAuth";
 import { useState, useRef, useEffect } from "react";
 import { getBackendStatus } from "../api/client";
 import { useAuth } from "../auth/authContext";
+import { PRESET_CATALOG_IDS } from "../../../shared/catalog/index.js";
 /* ── Icons ── */
 const Shield = ({ size = 24 }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -72,8 +73,10 @@ function labelFromFilename(filename) {
      onSelectForm(formLabel)  — navigate to FormSession
      onGoHome()               — navigate back to landing
      onGoHowItWorks()         — navigate to the landing page's "How It Works" section
+     onGoExplore()            — navigate to the Explore services page
+     onOpenGuide(id)          — open a service guide from the catalogue
    ═══════════════════════════════════════ */
-export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) {
+export default function Application({ onSelectForm, onGoHome, onGoHowItWorks, onGoExplore, onOpenGuide }) {
   const [mobileOpen,         setMobileOpen]         = useState(false);
   const [showMobilePreview,  setShowMobilePreview]  = useState(false);
   const [selectedForm,       setSelectedForm]       = useState(null);  // label string
@@ -194,6 +197,7 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
           <div className="nav-links hide-mobile">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoExplore?.()}>Explore Services</button>
             <button style={flatBtn} className="nav-link">Start Application</button>
             <button className="btn-primary" style={{ height: 36, padding: "0 12px" }}>Get Started</button>
             <NavAuth />
@@ -208,6 +212,7 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
           <div className="nav-mobile-menu hide-desktop">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoExplore?.()}>Explore Services</button>
             <button style={flatBtn} className="nav-link">Start Application</button>
             <button className="btn-primary" style={{ height: 40, padding: "0 16px" }}>Get Started</button>
             <NavAuth />
@@ -228,14 +233,14 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
 
               <h3 className="upload-title">Upload or Select a Form</h3>
               <p className="upload-desc">
-                Choose a government form below, or upload your own PDF or Word form — our AI will guide you through every field.
+                Choose a form below, or upload your own PDF or Word form. We'll check each value you'll enter and list the rules and documents — then you fill the official form yourself.
               </p>
 
               {/* ── Form cards ── */}
               <div className="form-selector-grid">
                 {FORMS.map(({ emoji, label, sub }) => (
+                  <div key={label} className="form-option-wrap">
                   <button
-                    key={label}
                     className="form-option-btn"
                     onClick={() => selectCard(label)}
                     style={selectedForm === label && !uploadedFile
@@ -248,8 +253,19 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
                       <span className="form-option-sublabel">{sub}</span>
                     </div>
                   </button>
+                  {PRESET_CATALOG_IDS[label] && (
+                    <button className="form-option-guide" onClick={() => onOpenGuide?.(PRESET_CATALOG_IDS[label])}>
+                      Rules, steps &amp; documents →
+                    </button>
+                  )}
+                  </div>
                 ))}
               </div>
+
+              <p className="explore-hint">
+                Not listed? <button className="link-btn" onClick={() => onGoExplore?.()}>Explore guides for 29 government services</button> —
+                certificates, ID cards, licences, agreements, exams and schemes.
+              </p>
 
               {/* ── Divider ── */}
               <div className="divider-or">
@@ -347,7 +363,7 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
                   style={{ marginTop: "1rem", height: 42, padding: "0 1.5rem", width: "100%", maxWidth: "28rem" }}
                   onClick={startWithUpload}
                 >
-                  Start Filling &quot;{uploadedFile.label}&quot; <ArrowRight size={16} />
+                  Prepare &quot;{uploadedFile.label}&quot; <ArrowRight size={16} />
                 </button>
               )}
             </div>
@@ -373,7 +389,7 @@ export default function Application({ onSelectForm, onGoHome, onGoHowItWorks }) 
                     ✓ Form uploaded · {uploadedFile.size}
                   </p>
                   <p className="preview-panel-empty-desc" style={{ marginTop: 8 }}>
-                    Click "Start Filling" to begin the AI-guided session
+                    Click "Prepare" to read the form and check your values
                   </p>
                 </>
               ) : selectedForm ? (

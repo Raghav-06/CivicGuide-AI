@@ -3,6 +3,7 @@ import { API_BASE, ApiError, apiRequest, getBackendStatus } from "../api/client"
 import { useAuth } from "../auth/authContext";
 import NavAuth from "../components/NavAuth";
 import { checkAnswer } from "../../../shared/answerRules.js";
+import { getService, requirementsFromService, PRESET_CATALOG_IDS } from "../../../shared/catalog/index.js";
 /* ══════════════════════════════════════════════════════════════════════
    API LAYER
    All calls go to the Express backend (backend/server.js).
@@ -70,7 +71,7 @@ async function apiScore(formFields, filledAnswers, validationResult) {
 }
 
 /* ── PDF download via backend (pdfkit) ── */
-async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, formName, sourceUrl) {
+async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, formName, sourceUrl, requirements) {
   const res = await fetch(`${API_BASE}/api/generate-pdf`, {
     method: "POST",
     credentials: "include",
@@ -81,6 +82,7 @@ async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, form
       document_checklist: documentChecklist,
       form_name: formName,
       source_url: sourceUrl ?? undefined,
+      requirements: requirements ?? undefined,
     }),
   });
   if (!res.ok) throw new Error(`PDF generation failed: ${res.status}`);
@@ -88,7 +90,7 @@ async function apiDownloadPDF(formFields, filledAnswers, documentChecklist, form
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${formName.replace(/\s+/g, "_")}_CiviGuide.pdf`;
+  a.download = `${formName.replace(/\s+/g, "_")}_Preparation_Sheet.pdf`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -505,7 +507,7 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
-  doc.text("CiviGuide AI — Official Form", margin, 12);
+  doc.text("Application Preparation Sheet - not an official form", margin, 12);
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
   doc.text(pdfSafe(selectedForm), margin, 21);
@@ -516,14 +518,14 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
   if (sourceUrl) {
     doc.setTextColor(37, 99, 235);
     doc.setFontSize(9);
-    doc.textWithLink(pdfSafe(`Submit online at: ${sourceUrl}`).slice(0, 110), margin, y, { url: sourceUrl });
+    doc.textWithLink(pdfSafe(`Official form: ${sourceUrl}`).slice(0, 110), margin, y, { url: sourceUrl });
     y += 8;
   }
 
   doc.setTextColor(30, 30, 30);
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
-  doc.text("Form Fields", margin, y); y += 2;
+  doc.text("Values to copy into the official form", margin, y); y += 2;
   doc.setDrawColor(220, 220, 220);
   doc.line(margin, y, pageW - margin, y); y += 8;
 
@@ -563,7 +565,7 @@ async function localGeneratePDF(formFields, fieldValues, docUploads, selectedFor
   }
 
   const safeTitle = selectedForm.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "") || "Form";
-  doc.save(`${safeTitle}_CiviGuide.pdf`);
+  doc.save(`${safeTitle}_Preparation_Sheet.pdf`);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -601,6 +603,67 @@ function Bold({ text }) {
 
 const flatBtn = { background: "none", border: "none", cursor: "pointer", padding: 0 };
 
+/* Copy one checked value, for pasting into the official online form. */
+function CopyValueButton({ value }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(id);
+  }, [copied]);
+  return (
+    <button type="button" className={`copy-btn${copied ? " copied" : ""}`}
+      onClick={() => navigator.clipboard?.writeText(String(value)).then(() => setCopied(true), () => {})}>
+      {copied ? "✓ Copied" : "Copy"}
+    </button>
+  );
+}
+
+const REQUIREMENT_SECTIONS = [
+  ["eligibility", "✅ Eligibility"], ["documents", "📁 Documents"], ["fees", "💰 Fees"], ["deadlines", "📅 Deadlines"],
+  ["photo_signature_specs", "📷 Photo & signature"], ["submission", "📮 How to submit"], ["rules", "⚖️ Rules"],
+];
+
+/* Rules & requirements read from the form (or, for ready-made forms, from its catalogue guide). */
+function RequirementsPanel({ requirements, loading, aiFields, catalogId, onOpenGuide, sourceUrl }) {
+  if (loading) {
+    return (
+      <div aria-busy="true">
+        {[60, 85, 70].map((w, i) => <span key={i} className="skeleton skeleton-line" style={{ width: `${w}%`, margin: "10px 0" }} />)}
+      </div>
+    );
+  }
+  const sections = REQUIREMENT_SECTIONS.filter(([key]) => requirements?.[key]?.length);
+  return (
+    <div className="requirements-panel">
+      {catalogId && (
+        <button className="btn-ghost req-guide-btn" onClick={() => onOpenGuide?.(catalogId)}>
+          Open the full step-by-step guide →
+        </button>
+      )}
+      {sourceUrl && (
+        <p className="req-source">Official form: <a href={sourceUrl} target="_blank" rel="noopener noreferrer">{sourceUrl}</a></p>
+      )}
+      {sections.length === 0 ? (
+        <p className="field-empty">
+          {aiFields
+            ? "The form text doesn't spell out eligibility, fees or documents. Check the official notice or office."
+            : "Rules and requirements are read from uploaded or linked forms with AI, which isn't available for this form."}
+        </p>
+      ) : sections.map(([key, title]) => (
+        <section key={key} className="req-section">
+          <h4>{title}</h4>
+          <ul>{requirements[key].map((item, i) => <li key={i}>{item}</li>)}</ul>
+        </section>
+      ))}
+      {sections.length > 0 && !catalogId && (
+        <p className="req-note">Read from the form's own text by AI — confirm on the official notice before applying.</p>
+      )}
+      <p className="req-note">CiviGuide gives general guidance. Rules, fees and documents can change and may differ by state — always confirm on the official website or office before applying.</p>
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ══════════════════════════════════════════════════════════════════════ */
@@ -610,6 +673,8 @@ export default function FormSession({
   onGoHome,
   onGoApplication,
   onGoHowItWorks,
+  onGoExplore,
+  onOpenGuide,            // (catalogId) → open the matching service guide
 }) {
   /* ── UI state ── */
   const [mobileOpen,        setMobileOpen]        = useState(false);
@@ -635,6 +700,9 @@ export default function FormSession({
   const [editingIdx,        setEditingIdx]        = useState(null);  // re-answering one field after the interview
   const [aiFields,          setAiFields]          = useState(false); // fields came from Engine 1+2 (not static fallback)
   const [sourceUrl,         setSourceUrl]         = useState(null);  // online form: where the details get submitted
+  const [requirements,      setRequirements]      = useState(null);  // rules & requirements read from the form (or its catalogue guide)
+  const [catalogId,         setCatalogId]         = useState(null);  // preset forms: the matching service guide
+  const [sideTab,           setSideTab]           = useState("values"); // right panel: "values" | "rules"
 
   /* ── Bottom panel state (Engine 4–6) ── */
   const [docUploads,        setDocUploads]        = useState({});
@@ -685,6 +753,11 @@ export default function FormSession({
       setEditingIdx(null);
       setAiFields(false);
       setSourceUrl(uploadedFile?.url ?? null);
+      // Presets have a catalogue guide, which supplies their rules & requirements even offline.
+      const presetGuide = uploadedFile ? null : getService(PRESET_CATALOG_IDS[selectedForm]);
+      setCatalogId(presetGuide?.id ?? null);
+      setRequirements(presetGuide ? requirementsFromService(presetGuide) : null);
+      setSideTab("values");
       setDocUploads({});
       setValidation(null);
       setScoreData(null);
@@ -722,6 +795,8 @@ export default function FormSession({
           fields = result.form_fields ?? [];
           fromAI = fields.length > 0;
           analysisNotice = result.notice ?? null;
+          if (result.requirements) setRequirements(result.requirements);
+          if (result.catalog_id) setCatalogId(result.catalog_id);
           if (result.source_url) setSourceUrl(result.source_url);
           if (uploadedFile?.url) pageTitle = result.form_name || null;
         } catch (err) {
@@ -757,8 +832,8 @@ export default function FormSession({
       const intro = fromAI
         ? (uploadedFile?.url
             ? `I've read the online form${pageTitle ? ` **${pageTitle}**` : ""} at ${uploadedFile.url} and found **${fields.length} details** it asks for. ` +
-              "I'll collect and check each one, so you can copy them into the website when you submit."
-            : `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language.`) +
+              "I'll collect and check each one, so you can copy them into the official website yourself."
+            : `I've analysed your **${formNameLabel}** form with AI and found **${fields.length} fields**. I'll ask about each one in simple language and check your answers — you then copy them into the official form.`) +
           (analysisNotice ? `\n\n⚠ ${analysisNotice}` : "") + `\n\n${howTo}`
         : ai
           ? `AI analysis isn't available right now, so I've loaded the standard **${formNameLabel}** fields instead (${fields.length} fields).\n\n${howTo}`
@@ -1009,7 +1084,7 @@ export default function FormSession({
 
       if (sourceUrl) {
         addMessage("ai", `🌐 **Submitting online:** open ${sourceUrl} and copy each answer from the review panel into the matching box. ` +
-          "Download the PDF to keep all your details (and the link) in one place.");
+          "Download the preparation sheet to keep all your details (and the link) in one place.");
       }
 
     } catch (err) {
@@ -1070,7 +1145,7 @@ export default function FormSession({
     // Try backend PDF (pdfkit — professional quality)
     if (backendOnline) {
       try {
-        await apiDownloadPDF(formFields, fieldValues, checklist, selectedForm, sourceUrl);
+        await apiDownloadPDF(formFields, fieldValues, checklist, selectedForm, sourceUrl, requirements);
         setPdfGenerating(false);
         return;
       } catch (err) {
@@ -1114,6 +1189,7 @@ export default function FormSession({
           <div className="nav-links hide-mobile">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoExplore?.()}>Explore Services</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoApplication?.()}>Start Application</button>
             <button className="btn-primary" style={{ height: 36, padding: "0 12px" }} onClick={() => onGoApplication?.()}>Get Started</button>
             <NavAuth />
@@ -1126,6 +1202,7 @@ export default function FormSession({
           <div className="nav-mobile-menu hide-desktop">
             <button style={flatBtn} className="nav-link" onClick={() => onGoHome?.()}>Home</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoHowItWorks?.()}>How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoExplore?.()}>Explore Services</button>
             <button style={flatBtn} className="nav-link" onClick={() => onGoApplication?.()}>Start Application</button>
             <button className="btn-primary" style={{ height: 40, padding: "0 16px" }} onClick={() => onGoApplication?.()}>Get Started</button>
             <NavAuth />
@@ -1236,7 +1313,7 @@ export default function FormSession({
           <div className="mobile-toggle">
             <button className="btn-ghost" style={{ width: "100%" }} onClick={() => setShowMobilePreview(o => !o)}>
               <FileTextIcon size={16} />
-              {showMobilePreview ? "Hide" : "Show"} Form Preview
+              {showMobilePreview ? "Hide" : "Show"} values &amp; rules
               <ChevronUpIcon size={16} style={{ marginLeft: "auto", transform: showMobilePreview ? "rotate(180deg)" : "none" }} />
             </button>
           </div>
@@ -1246,7 +1323,7 @@ export default function FormSession({
             <div className="preview-header-bar">
               <div className="preview-header-left">
                 <FileTextIcon size={16} style={{ color: "var(--primary)" }} />
-                <span className="preview-header-title">Live Form Preview</span>
+                <span className="preview-header-title">Your form</span>
               </div>
               <div className="confidence-badge">
                 <div className="confidence-dot" style={{ background: confColor }} />
@@ -1255,7 +1332,21 @@ export default function FormSession({
                 </span>
               </div>
             </div>
-            <div className="preview-scroll">
+            <div className="side-tabs" role="tablist" aria-label="Form details">
+              <button role="tab" aria-selected={sideTab === "values"} className={`side-tab${sideTab === "values" ? " active" : ""}`} onClick={() => setSideTab("values")}>
+                Values to copy <span className="tab-badge">{filledCount}/{totalFields}</span>
+              </button>
+              <button role="tab" aria-selected={sideTab === "rules"} className={`side-tab${sideTab === "rules" ? " active" : ""}`} onClick={() => setSideTab("rules")}>
+                Rules &amp; requirements
+              </button>
+            </div>
+            {sideTab === "rules" ? (
+              <div className="preview-scroll" role="tabpanel">
+                <RequirementsPanel requirements={requirements} loading={loadingFields} aiFields={aiFields}
+                  catalogId={catalogId} onOpenGuide={onOpenGuide} sourceUrl={sourceUrl} />
+              </div>
+            ) : (
+            <div className="preview-scroll" role="tabpanel">
               <div className="preview-form-badge">
                 <p className="preview-form-name">{uploadedFile?.name ?? selectedForm}</p>
                 <p className="preview-form-sub">
@@ -1264,9 +1355,13 @@ export default function FormSession({
               </div>
 
               {loadingFields ? (
-                <div style={{ padding: "2rem", textAlign: "center", color: "var(--muted-fg)", fontSize: "0.875rem" }}>
-                  <div className="pdf-spinner" style={{ margin: "0 auto 8px", border: "2px solid var(--border)", borderTopColor: "var(--primary)" }} />
-                  Analysing form with AI…
+                <div aria-busy="true" aria-label="Analysing form">
+                  {[70, 55, 80, 60, 75].map((w, i) => (
+                    <div key={i} className="field-row">
+                      <span className="skeleton skeleton-line" style={{ width: "35%" }} />
+                      <span className="skeleton skeleton-line" style={{ width: `${w}%` }} />
+                    </div>
+                  ))}
                 </div>
               ) : (
                 formFields.map((field, idx) => {
@@ -1283,7 +1378,7 @@ export default function FormSession({
                         {!filled && !hasError && <CircleAlert    size={14} style={{ color: "rgba(107,114,128,0.4)" }} />}
                       </div>
                       {filled
-                        ? <p className="field-value">{formatValue(val)}</p>
+                        ? <p className="field-value">{formatValue(val)} {!hasError && <CopyValueButton value={formatValue(val)} />}</p>
                         : <p className="field-empty">{isCurrent ? "Answering now…" : interviewDone ? "Not provided" : "Awaiting response…"}</p>}
                       {hasError && (
                         <p className="field-error-msg">{validationErrors.find(e => e.field === field.field)?.reason}</p>
@@ -1293,6 +1388,7 @@ export default function FormSession({
                 })
               )}
             </div>
+            )}
           </div>
         </div>
 
@@ -1385,7 +1481,7 @@ export default function FormSession({
           {/* ── Final Review + Score + Download ── */}
           <div className="panel-card" style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
             <div className="review-header">
-              <h3 className="section-title" style={{ marginBottom: 0 }}>Final Review</h3>
+              <h3 className="section-title" style={{ marginBottom: 0 }}>Values to copy into the official form</h3>
               <div className="review-confidence">
                 <div style={{ width: 12, height: 12, borderRadius: "50%", background: confColor }} />
                 <span style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--fg)" }}>
@@ -1469,7 +1565,7 @@ export default function FormSession({
               >
                 {pdfGenerating
                   ? <><span className="pdf-spinner" /> Generating…</>
-                  : <><DownloadIcon size={16} /> Download PDF</>
+                  : <><DownloadIcon size={16} /> Download preparation sheet</>
                 }
               </button>
             </div>

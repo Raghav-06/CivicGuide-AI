@@ -139,8 +139,9 @@ const TRUST = [
    COMPONENT
    Props:
    - onGoApplication()  → navigate to Application page
+   - onGoExplore()      → navigate to the Explore services page
    ───────────────────────────────────────────────────── */
-export default function CiviGuideAI({ onGoApplication }) {
+export default function CiviGuideAI({ onGoApplication, onGoExplore }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // All CTAs call this
@@ -172,6 +173,7 @@ export default function CiviGuideAI({ onGoApplication }) {
           <div className="nav-links hide-mobile">
             <button style={flatBtn} className="nav-link">Home</button>
             <button style={flatBtn} className="nav-link" onClick={scrollToHowItWorks}>How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoExplore?.()}>Explore Services</button>
             <button style={flatBtn} className="nav-link" onClick={goApp}>Start Application</button>
             <button className="btn-primary" style={{ height: 36, padding: "0 12px" }} onClick={goApp}>
               Get Started
@@ -189,6 +191,7 @@ export default function CiviGuideAI({ onGoApplication }) {
           <div className="nav-mobile-menu hide-desktop">
             <button style={flatBtn} className="nav-link">Home</button>
             <button style={flatBtn} className="nav-link" onClick={scrollToHowItWorks}>How It Works</button>
+            <button style={flatBtn} className="nav-link" onClick={() => onGoExplore?.()}>Explore Services</button>
             <button style={flatBtn} className="nav-link" onClick={goApp}>Start Application</button>
             <button className="btn-primary" style={{ height: 40, padding: "0 16px" }} onClick={goApp}>
               Get Started
@@ -209,7 +212,7 @@ export default function CiviGuideAI({ onGoApplication }) {
               <div className="hero-left animate-fade-in">
                 <div className="badge-pill" style={{ width: "fit-content" }}>
                   <span className="badge-dot animate-pulse-soft" />
-                  AI-Powered Government Form Assistant
+                  Your guide to Indian government applications
                 </div>
 
                 <h1 className="hero-title">
@@ -218,8 +221,9 @@ export default function CiviGuideAI({ onGoApplication }) {
                 </h1>
 
                 <p className="hero-description">
-                  We transform complex government forms into simple conversations
-                  and generate submission-ready documents.
+                  Rules, steps, documents and exactly what to enter in every field — for
+                  certificates, ID cards, licences, agreements, exams and schemes. You fill
+                  the official form yourself; we help you get it right the first time.
                 </p>
 
                 <div className="hero-cta-group">
@@ -227,8 +231,8 @@ export default function CiviGuideAI({ onGoApplication }) {
                   <button className="btn-primary" style={{ height: 44, padding: "0 2rem" }} onClick={goApp}>
                     Start Application <ArrowRight size={16} />
                   </button>
-                  <button className="btn-outline" style={{ height: 44, padding: "0 2rem" }} onClick={scrollToHowItWorks}>
-                    How It Works
+                  <button className="btn-outline" style={{ height: 44, padding: "0 2rem" }} onClick={() => onGoExplore?.()}>
+                    Explore services
                   </button>
                 </div>
               </div>
