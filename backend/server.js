@@ -28,9 +28,16 @@ import { analyzeFormDetailed, processAnswer, validateForm, getDocuments, scoreSu
 import { readFormBuffer, detectFormType } from "./src/formReader.js";
 import { readFormFromUrl, MAX_URL_LENGTH } from "./src/urlReader.js";
 import { generateFilledPDF } from "./src/formOutput.js";
-import { PRESET_FORM_TEXTS } from "./src/presets.js";
+import { generatePrepSheetPDF } from "./src/prepSheet.js";
+import { PRESET_FORM_TEXTS, PRESET_CATALOG_IDS } from "./src/presets.js";
 import { isEmpty, aiStatus } from "./src/engines/ai.js";
 import { answerQuestion } from "./src/engines/assistant.js";
+import { extractRequirements, normaliseRequirements } from "./src/engines/requirements.js";
+import { generateGuide, answerServiceQuestion, normaliseService } from "./src/engines/guide.js";
+import {
+  SERVICES, CATEGORIES, getService, compactService, searchServices, findInService, requirementsFromService,
+} from "../shared/catalog/index.js";
+import { checkAnswer, fieldKind } from "../shared/answerRules.js";
 import {
   HttpError, route, readFields, readAnswers, readObject, readField, readText, attachmentHeader,
 } from "./src/http.js";
@@ -142,6 +149,19 @@ async function analyzeOrExplain(formText, options) {
   }
 }
 
+/**
+ * Fields + rules & requirements for an uploaded or linked form. Both read the same text and are
+ * independent, so they run in parallel; a failed requirements read just leaves `requirements` null.
+ */
+async function analyzeWithRequirements(formText, options) {
+  const requirements = extractRequirements(formText, options).catch((err) => {
+    console.warn("Requirements extraction failed:", err.message);
+    return null;
+  });
+  const [analysis, reqs] = await Promise.all([analyzeOrExplain(formText, options), requirements]);
+  return { ...analysis, requirements: reqs };
+}
+
 // Preset texts never change, so their analysis is cached after the first success.
 const presetCache = new Map();
 
@@ -153,7 +173,12 @@ app.post("/api/analyze-preset", aiGuard, route(async (req, res) => {
 
   if (!presetCache.has(formName)) presetCache.set(formName, await analyzeOrExplain(formText));
   const { fields, notice } = presetCache.get(formName);
-  res.json({ form_fields: fields, form_name: formName, notice });
+  // Presets are guided by their catalogue entry, which also supplies the rules & requirements.
+  const service = getService(PRESET_CATALOG_IDS[formName]);
+  res.json({
+    form_fields: fields, form_name: formName, notice,
+    catalog_id: service?.id ?? null, requirements: service ? requirementsFromService(service) : null,
+  });
 }));
 
 // ── Engine 1+2: Analyze an uploaded PDF or DOCX ──────────────────────
@@ -182,8 +207,8 @@ app.post("/api/analyze-pdf", uploadLimiter, aiGuard, upload.single("file"), rout
     throw new HttpError(422, "No text found in this file. If it's a scanned image, upload a text-based PDF or DOCX instead.");
   }
 
-  const { fields, notice } = await analyzeOrExplain(formText);
-  res.json({ form_fields: fields, form_name: file.originalname, notice });
+  const { fields, notice, requirements } = await analyzeWithRequirements(formText);
+  res.json({ form_fields: fields, form_name: file.originalname, notice, requirements });
 }));
 
 // ── Engine 1+2: Analyze an online form (or its notice) from a URL ────
@@ -207,8 +232,8 @@ app.post("/api/analyze-url", uploadLimiter, aiGuard, route(async (req, res) => {
       + "open it in your browser, save it as a PDF (Ctrl+P → Save as PDF) and upload that, or paste the link to the official notification PDF.");
   }
 
-  const { fields, notice } = await analyzeOrExplain(page.text, { source: page.kind === "html" ? "web" : "file" });
-  res.json({ form_fields: fields, form_name: page.title.slice(0, 120), source_url: page.url, notice });
+  const { fields, notice, requirements } = await analyzeWithRequirements(page.text, { source: page.kind === "html" ? "web" : "file" });
+  res.json({ form_fields: fields, form_name: page.title.slice(0, 120), source_url: page.url, notice, requirements });
 }));
 
 // ── Assistant: free-form questions about forms and documents ─────────
@@ -224,6 +249,96 @@ app.post("/api/ask", aiGuard, route(async (req, res) => {
     console.error("ask failed:", err);
     throw new HttpError(502, "The assistant is unavailable right now. Please try again in a moment.");
   }
+}));
+
+// ── Service catalogue: Indian government applications ───────────────
+app.get("/api/catalog", (req, res) => {
+  res.json({ services: SERVICES.map(compactService), categories: CATEGORIES });
+});
+
+app.get("/api/catalog/:id", (req, res) => {
+  const service = getService(req.params.id);
+  if (!service) throw new HttpError(404, `No service with id "${req.params.id}" in the catalogue.`);
+  res.json(service);
+});
+
+/**
+ * Guide endpoint (AI-backed when configured):
+ *   { query }        a service not in the catalogue → an AI-written guide (ai_generated: true),
+ *                    or, without AI, the closest catalogue matches
+ *   { id, question } a question about a catalogue service → a short answer
+ *                    (without AI: the catalogue lines that best match the question)
+ */
+app.post("/api/guide", aiGuard, route(async (req, res) => {
+  const aiOn = aiStatus().enabled;
+
+  if (req.body?.question !== undefined) {
+    const question = readText(req.body, "question", { max: 500, label: "your question" });
+    const service = typeof req.body.id === "string" ? getService(req.body.id) : normaliseService(req.body.service, { aiGenerated: true });
+    if (!service) throw new HttpError(404, "That service isn't in the catalogue.");
+    const excerpts = findInService(service, question);
+    if (!aiOn) return res.json({ answer: null, excerpts, ai: false });
+    try {
+      res.json({ answer: await answerServiceQuestion(service, question), excerpts, ai: true });
+    } catch (err) {
+      console.error("guide question failed:", err);
+      res.json({ answer: null, excerpts, ai: false, notice: "The AI assistant is unavailable right now — here is what the guide says." });
+    }
+    return;
+  }
+
+  const query = readText(req.body, "query", { max: 200, label: "the service you're looking for" });
+  const matches = searchServices(query).slice(0, 5).map(({ service }) => compactService(service));
+  if (!aiOn) {
+    // Nothing matched every word: fall back to services matching any one word.
+    const loose = matches.length ? matches : [...new Map(query.split(/\s+/).flatMap((w) => searchServices(w))
+      .map(({ service }) => [service.id, compactService(service)])).values()].slice(0, 5);
+    return res.json({ guide: null, matches: loose, ai: false });
+  }
+  try {
+    const guide = await generateGuide(query);
+    if (!guide) return res.json({ guide: null, matches, ai: true, notice: "That doesn't look like an Indian government service." });
+    res.json({ guide, matches, ai: true });
+  } catch (err) {
+    console.error("guide generation failed:", err);
+    res.json({ guide: null, matches, ai: false, notice: "The AI guide is unavailable right now — here are the closest services we have." });
+  }
+}));
+
+// ── Prep sheet for a service guide (no AI) ───────────────────────────
+// ID numbers (Aadhaar, PAN, Voter ID) are never used here: the browser doesn't send them,
+// and any that arrive are dropped. Other values are re-checked and kept only if valid.
+const ID_KINDS = new Set(["aadhaar", "aadhaar_or_voter", "voter_id", "pan"]);
+app.post("/api/prep-sheet", route(async (req, res) => {
+  const service = typeof req.body?.id === "string"
+    ? getService(req.body.id)
+    : normaliseService(req.body?.service, { aiGenerated: true });
+  if (!service) throw new HttpError(404, "Unknown service — open a guide from the catalogue first.");
+
+  const raw = readAnswers(req.body, "values");
+  const values = {};
+  for (const f of service.fields) {
+    if (ID_KINDS.has(fieldKind(f)) || raw[f.field] === undefined) continue;
+    const checked = checkAnswer(f, raw[f.field]);
+    if (!checked.error && String(checked.value ?? "").trim()) values[f.field] = checked.value;
+  }
+  const strings = (key, max = 100) => (Array.isArray(req.body?.[key]) ? req.body[key].filter((x) => typeof x === "string").slice(0, max) : []);
+  const doneSteps = Array.isArray(req.body?.done_steps) ? req.body.done_steps.filter(Number.isInteger).slice(0, 50) : [];
+  const state = typeof req.body?.state === "string" ? req.body.state.slice(0, 80) : null;
+
+  let pdf;
+  try {
+    pdf = await generatePrepSheetPDF(service, {
+      values, checkedDocuments: strings("checked_documents"), conditions: strings("conditions", 20), doneSteps, state,
+    });
+  } catch (err) {
+    throw new HttpError(500, `PDF generation failed: ${err.message}`);
+  }
+  res.set({
+    "Content-Type": "application/pdf",
+    "Content-Disposition": attachmentHeader(`${service.name.replace(/[\s/\\()]+/g, "_")}_Preparation_Sheet.pdf`),
+  });
+  res.send(pdf);
 }));
 
 // ── Engine 2+3: Process a single answer ──────────────────────────────
@@ -314,15 +429,18 @@ app.post("/api/generate-pdf", route(async (req, res) => {
   const rawSource = typeof req.body?.source_url === "string" ? req.body.source_url.trim() : "";
   const sourceUrl = /^https?:\/\/\S+$/i.test(rawSource) && rawSource.length <= MAX_URL_LENGTH ? rawSource : null;
 
+  const rawRequirements = readObject(req.body, "requirements");
+  const requirements = Object.keys(rawRequirements).length ? normaliseRequirements([rawRequirements]) : null;
+
   let pdf;
   try {
-    pdf = await generateFilledPDF(form_fields, filled_answers, document_checklist, { sourceUrl });
+    pdf = await generateFilledPDF(form_fields, filled_answers, document_checklist, { sourceUrl, requirements });
   } catch (err) {
     throw new HttpError(500, `PDF generation failed: ${err.message}`);
   }
   res.set({
     "Content-Type": "application/pdf",
-    "Content-Disposition": attachmentHeader(`${formName.replace(/[\s/\\]+/g, "_")}_CiviGuide.pdf`),
+    "Content-Disposition": attachmentHeader(`${formName.replace(/[\s/\\]+/g, "_")}_Preparation_Sheet.pdf`),
   });
   res.send(pdf);
 }));

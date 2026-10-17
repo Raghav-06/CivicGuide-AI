@@ -41,9 +41,9 @@ export function scriptRuns(text) {
   return runs;
 }
 
-const fontFor = (deva, bold) => (deva ? (bold ? "deva-bold" : "deva") : bold ? "latin-bold" : "latin");
+export const fontFor = (deva, bold) => (deva ? (bold ? "deva-bold" : "deva") : bold ? "latin-bold" : "latin");
 
-function registerFonts(doc) {
+export function registerFonts(doc) {
   doc.registerFont("latin", FONTS.latin);
   doc.registerFont("latin-bold", FONTS.latinBold);
   doc.registerFont("deva", FONTS.deva);
@@ -55,7 +55,7 @@ function registerFonts(doc) {
  * default to the left margin and the current line, because doc.text() with undefined x/y
  * misreads its arguments and drops options such as `align`.
  */
-function mixedText(doc, text, { bold = false, x = doc.page.margins.left, y = doc.y, ...opts } = {}) {
+export function mixedText(doc, text, { bold = false, x = doc.page.margins.left, y = doc.y, ...opts } = {}) {
   const runs = scriptRuns(text);
   if (!runs.length) runs.push({ deva: false, text: "" });
   runs.forEach((run, i) => {
@@ -67,17 +67,27 @@ function mixedText(doc, text, { bold = false, x = doc.page.margins.left, y = doc
 }
 
 /** Height of mixed-script text: measured in both fonts and the larger taken, so cells never overflow. */
-function mixedHeight(doc, text, { bold = false, ...opts } = {}) {
+export function mixedHeight(doc, text, { bold = false, ...opts } = {}) {
   const s = String(text);
   const latin = doc.font(fontFor(false, bold)).heightOfString(s, opts);
   if (!DEVANAGARI.test(s)) return latin;
   return Math.max(latin, doc.font(fontFor(true, bold)).heightOfString(s, opts));
 }
 
-const asText = (v) => (typeof v === "string" ? v : v === null || v === undefined ? "" : String(v));
+export const PREP_SHEET_TITLE = "Application Preparation Sheet — not an official form";
 
-/** Build the filled-form PDF and resolve with its bytes. */
-export function generateFilledPDF(formFields, filledAnswers, documentChecklist, { sourceUrl = null } = {}) {
+const REQUIREMENT_SECTIONS = [
+  ["eligibility", "Eligibility"], ["rules", "Rules"], ["documents", "Documents"], ["fees", "Fees"],
+  ["deadlines", "Deadlines"], ["photo_signature_specs", "Photo & signature specs"], ["submission", "How to submit"],
+];
+
+export const asText = (v) => (typeof v === "string" ? v : v === null || v === undefined ? "" : String(v));
+
+/**
+ * Build the preparation-sheet PDF (the user's checked values to copy into the official form, plus the
+ * document checklist) and resolve with its bytes. `requirements` is the analysed form's rules, if any.
+ */
+export function generateFilledPDF(formFields, filledAnswers, documentChecklist, { sourceUrl = null, requirements = null } = {}) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margin: 2 * CM });
     const chunks = [];
@@ -87,7 +97,7 @@ export function generateFilledPDF(formFields, filledAnswers, documentChecklist, 
 
     try {
       registerFonts(doc);
-      render(doc, formFields, filledAnswers, documentChecklist, sourceUrl);
+      render(doc, formFields, filledAnswers, documentChecklist, sourceUrl, requirements);
       doc.end();
     } catch (err) {
       reject(err);
@@ -95,7 +105,7 @@ export function generateFilledPDF(formFields, filledAnswers, documentChecklist, 
   });
 }
 
-function render(doc, formFields, filledAnswers, documentChecklist, sourceUrl) {
+function render(doc, formFields, filledAnswers, documentChecklist, sourceUrl, requirements) {
   const left = doc.page.margins.left;
   const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
@@ -118,7 +128,10 @@ function render(doc, formFields, filledAnswers, documentChecklist, sourceUrl) {
 
   // ── Header ────────────────────────────────
   doc.fontSize(18).fillColor(NAVY);
-  mixedText(doc, "FILLED GOVERNMENT FORM", { bold: true, align: "center", width });
+  mixedText(doc, PREP_SHEET_TITLE, { bold: true, align: "center", width });
+  doc.moveDown(0.3);
+  doc.fontSize(9).fillColor(GREY);
+  mixedText(doc, "A guide to copy from — fill and submit the official form yourself on the portal or on paper.", { align: "center", width });
   doc.moveDown(0.3);
   const now = new Date().toLocaleString("en-US", {
     month: "long", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true,
@@ -128,13 +141,13 @@ function render(doc, formFields, filledAnswers, documentChecklist, sourceUrl) {
   if (sourceUrl) {
     doc.moveDown(0.3);
     doc.font("latin").fontSize(9).fillColor(NAVY)
-      .text(`Submit online at: ${sourceUrl}`, left, doc.y, { align: "center", width, link: sourceUrl, underline: true });
+      .text(`Official form: ${sourceUrl}`, left, doc.y, { align: "center", width, link: sourceUrl, underline: true });
   }
   doc.moveDown(1);
   hr(1, NAVY);
 
   // ── Filled Fields ─────────────────────────
-  section("APPLICANT INFORMATION");
+  section("VALUES TO COPY INTO THE OFFICIAL FORM");
   for (const field of formFields) {
     const name = asText(field.field);
     const label = asText(field.label) || name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -151,6 +164,21 @@ function render(doc, formFields, filledAnswers, documentChecklist, sourceUrl) {
     mixedText(doc, String(value), { x: left, y: doc.y, width });
     doc.moveDown(0.2);
     hr(0.3, LIGHT_GREY);
+  }
+
+  // ── Rules & requirements (from the analysed form) ──
+  const reqSections = requirements && typeof requirements === "object"
+    ? REQUIREMENT_SECTIONS.filter(([key]) => Array.isArray(requirements[key]) && requirements[key].length)
+    : [];
+  if (reqSections.length) {
+    doc.moveDown(0.5);
+    section("RULES & REQUIREMENTS (FROM THE FORM)");
+    for (const [key, title] of reqSections) {
+      doc.fontSize(10).fillColor(NAVY);
+      mixedText(doc, title, { bold: true, x: left, y: doc.y, width });
+      for (const item of requirements[key].slice(0, 20)) normal(`• ${asText(item)}`);
+      doc.moveDown(0.4);
+    }
   }
 
   // ── Document Checklist ────────────────────
@@ -224,11 +252,11 @@ function render(doc, formFields, filledAnswers, documentChecklist, sourceUrl) {
   hr(0.5, LIGHT_GREY);
   doc.fontSize(7).fillColor(GREY);
   mixedText(doc,
-    "This document was generated by CiviGuide AI. Please verify all information before submission.",
+    `${PREP_SHEET_TITLE}. Generated by CiviGuide AI from your own answers. Rules, fees and documents can change and may differ by state — always confirm on the official website or office before applying.`,
     { x: left, y: doc.y, align: "center", width });
 }
 
-/** Build the filled-form PDF and write it to `outputPath`. */
+/** Build the preparation-sheet PDF and write it to `outputPath`. */
 export async function writeFilledPDF(formFields, filledAnswers, documentChecklist, outputPath = "filled_form.pdf", options) {
   await writeFile(outputPath, await generateFilledPDF(formFields, filledAnswers, documentChecklist, options));
   return outputPath;

@@ -108,6 +108,14 @@ export const SERVICES = [
   ...educationExams, ...jobs, ...welfareSchemes, ...taxFinance, ...business,
 ];
 
+/** The ready-made forms on the Start Application page, and the catalogue entry that guides each one. */
+export const PRESET_CATALOG_IDS = {
+  "Passport Application": "passport-fresh",
+  "Income Certificate": "income-certificate",
+  "Residence Proof Certificate": "domicile-certificate",
+  "Birth Certificate": "birth-certificate",
+};
+
 const BY_ID = new Map(SERVICES.map((s) => [s.id, s]));
 
 /** The full catalogue entry, or null. */
@@ -273,4 +281,24 @@ export function findInService(service, question, limit = 4) {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((x) => x.line);
+}
+
+/** Requirement keys returned by the form analysis (and built from catalogue entries for presets). */
+export const REQUIREMENT_KEYS = ["eligibility", "rules", "documents", "fees", "deadlines", "photo_signature_specs", "submission"];
+
+/**
+ * A catalogue entry as the `requirements` object the analyse endpoints return:
+ * { eligibility, rules, documents, fees, deadlines, photo_signature_specs, submission }, each a string array or null.
+ */
+export function requirementsFromService(s) {
+  const list = (a) => (Array.isArray(a) && a.length ? a : null);
+  return {
+    eligibility: list(s.eligibility),
+    rules: list([...(s.rules ?? []), ...(s.rejection_reasons ?? []).map((r) => `Common rejection: ${r}`)]),
+    documents: list((s.documents ?? []).map((d) => `${d.name}${d.condition ? ` (${d.condition})` : ""}${d.accepted?.length ? ` — accepted: ${d.accepted.join(", ")}` : ""}`)),
+    fees: s.fees ? [s.fees] : null,
+    deadlines: s.timeline ? [s.timeline] : null,
+    photo_signature_specs: s.photo_signature_specs ? [s.photo_signature_specs] : null,
+    submission: list((s.steps ?? []).map((st) => `${st.title} (${st.mode}): ${st.detail}`)),
+  };
 }

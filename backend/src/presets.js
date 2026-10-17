@@ -1,4 +1,7 @@
 // Preset form texts used when the user picks a card (not uploading a PDF).
+// Each preset has a full guide in the service catalogue; PRESET_CATALOG_IDS links them.
+export { PRESET_CATALOG_IDS } from "../../shared/catalog/index.js";
+
 export const PRESET_FORM_TEXTS = {
   "Passport Application": `
 PASSPORT APPLICATION FORM (Form SP-1)
